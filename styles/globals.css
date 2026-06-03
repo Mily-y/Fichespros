@@ -1,0 +1,56 @@
+/* Reset global */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  scroll-behavior: smooth;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  background: #0f1117;
+  color: #f1f5f9;
+  font-family: 'Nunito', 'Segoe UI', Tahoma, Arial, sans-serif;
+  min-height: 100vh;
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Scrollbar personnalisée */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: #0f1117; }
+::-webkit-scrollbar-thumb { background: rgba(79,125,255,.35); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(79,125,255,.6); }
+
+/* Sélection texte */
+::selection {
+  background: rgba(79,125,255,.3);
+  color: #f1f5f9;
+}
+
+/* Focus visible */
+:focus-visible {
+  outline: 2px solid #4f7dff;
+  outline-offset: 2px;
+}
+
+/* Images responsive */
+img {
+  max-width: 100%;
+  height: auto;
+}
+
+/* Liens */
+a {
+  color: inherit;
+}
+
+/* Select dark */
+select option {
+  background: #1a1f2e;
+  color: #f1f5f9;
+}
