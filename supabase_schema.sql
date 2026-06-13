@@ -224,3 +224,94 @@ ON CONFLICT DO NOTHING;
 -- Après exécution, allez dans Authentication > Settings
 -- et désactivez "Confirm email" pour les tests
 -- ═══════════════════════════════════════════════════════════
+
+-- ═══════════════════════════════════════════════════════════
+-- CORRECTIONS — Exécutez ce bloc APRÈS le script principal
+-- ═══════════════════════════════════════════════════════════
+
+-- CORRECTION P3 : Trigger auto-création profil à l'inscription
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS TRIGGER AS $$
+BEGIN
+  INSERT INTO public.users (id, nom, email, role, date_inscription)
+  VALUES (
+    NEW.id,
+    COALESCE(NEW.raw_user_meta_data->>'nom', split_part(NEW.email, '@', 1)),
+    NEW.email,
+    'user',
+    NOW()
+  )
+  ON CONFLICT (id) DO NOTHING;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+CREATE TRIGGER on_auth_user_created
+  AFTER INSERT ON auth.users
+  FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
+
+-- CORRECTION P4 : Table paramètres persistants
+CREATE TABLE IF NOT EXISTS public.parametres (
+  id INTEGER PRIMARY KEY DEFAULT 1,
+  paie_mtn_numero TEXT DEFAULT '0161234567',
+  paie_mtn_nom TEXT DEFAULT 'FichesPro Bénin',
+  paie_moov_numero TEXT DEFAULT '9612345678',
+  paie_moov_nom TEXT DEFAULT 'FichesPro Bénin',
+  paie_celtiis_numero TEXT DEFAULT '0191234567',
+  paie_celtiis_nom TEXT DEFAULT 'FichesPro Bénin',
+  support_whatsapp TEXT DEFAULT '22961234567',
+  support_telegram TEXT DEFAULT 'FichesProBenin',
+  abo_prix INTEGER DEFAULT 3000,
+  abo_gratuits INTEGER DEFAULT 5,
+  abo_jours INTEGER DEFAULT 365,
+  abo_delai INTEGER DEFAULT 30,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+INSERT INTO public.parametres (id) VALUES (1) ON CONFLICT DO NOTHING;
+ALTER TABLE public.parametres ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Parametres lisibles" ON public.parametres FOR SELECT USING (true);
+CREATE POLICY "Parametres modifiables" ON public.parametres FOR ALL USING (true);
+
+-- CORRECTION P5 : Colonnes supplémentaires paiements
+ALTER TABLE public.paiements
+  ADD COLUMN IF NOT EXISTS preuve_transaction TEXT,
+  ADD COLUMN IF NOT EXISTS nom_payeur TEXT,
+  ADD COLUMN IF NOT EXISTS telephone TEXT;
+
+-- Fonction incrémenter téléchargements
+CREATE OR REPLACE FUNCTION increment_telechargements(fiche_id_param BIGINT)
+RETURNS void AS $$
+BEGIN
+  UPDATE public.fiches
+  SET nb_telechargements = nb_telechargements + 1
+  WHERE id = fiche_id_param;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- Vue paiements en attente pour l'admin
+CREATE OR REPLACE VIEW public.paiements_en_attente AS
+SELECT p.*, u.nom as user_nom, u.email as user_email
+FROM public.paiements p
+LEFT JOIN public.users u ON u.id = p.user_id
+WHERE p.statut = 'en_attente'
+ORDER BY p.created_at DESC;
+
+-- Politique RLS pour paiements
+ALTER TABLE public.paiements ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Paiements par utilisateur" ON public.paiements
+  FOR INSERT WITH CHECK (auth.uid() = user_id);
+CREATE POLICY "Paiements visibles admin" ON public.paiements
+  FOR SELECT USING (true);
+CREATE POLICY "Paiements modifiables" ON public.paiements
+  FOR UPDATE USING (true);
+
+-- Politique RLS pour abonnements
+ALTER TABLE public.abonnements ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Abonnements visibles" ON public.abonnements FOR SELECT USING (true);
+CREATE POLICY "Abonnements modifiables" ON public.abonnements FOR ALL USING (true);
+
+-- Permettre la mise à jour de users par l'admin
+DROP POLICY IF EXISTS "Admin modifie users" ON public.users;
+CREATE POLICY "Admin modifie users" ON public.users
+  FOR UPDATE USING (true);

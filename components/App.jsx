@@ -441,7 +441,7 @@ function UssdBloc({ sel, prix, copied, onCopy }) {
 }
 
 // ─── MODAL PAIEMENT (abonnement numérique annuel) ────────────────────────────
-function PaiementModal({ onClose, onSuccess, cfg, prix: prixProp, supportCfg }) {
+function PaiementModal({ onClose, onSuccess, cfg, prix: prixProp, supportCfg, onSubmitPaie }) {
   const [step, setStep] = useState(1);
   const [methode, setMethode] = useState("");
   const [nom, setNom] = useState("");
@@ -522,7 +522,13 @@ function PaiementModal({ onClose, onSuccess, cfg, prix: prixProp, supportCfg }) 
                 <div style={{ fontSize:11, color:G.textMuted, marginTop:3 }}>Reçu par SMS après le paiement</div>
               </div>
             </div>
-            <button className="btn btn-p btn-lg" style={{ width:"100%" }} disabled={!nom||!phone||!preuve} onClick={function() { setStep(4); }}>Soumettre ma preuve ✓</button>
+            <button className="btn btn-p btn-lg" style={{ width:"100%" }} disabled={!nom||!phone||!preuve} onClick={async function() {
+              // Soumettre le paiement à Supabase pour validation admin
+              try {
+                if (onSubmitPaie) await onSubmitPaie(nom, phone, preuve, methode, prix);
+              } catch(e) {}
+              setStep(4);
+            }}>Soumettre ma preuve ✓</button>
           </div>
         )}
 
@@ -530,7 +536,16 @@ function PaiementModal({ onClose, onSuccess, cfg, prix: prixProp, supportCfg }) 
           <div style={{ textAlign:"center", padding:"14px 0" }}>
             <div style={{ fontSize:56, marginBottom:12 }}>✅</div>
             <h2 className="fd" style={{ fontSize:20, fontWeight:800, marginBottom:9 }}>Preuve reçue !</h2>
-            <p style={{ color:G.textSecondary, fontSize:13, marginBottom:13, lineHeight:1.6 }}>Vérification en cours. Accès activé sous <b style={{ color:G.textPrimary }}>15–30 min</b>.</p>
+            <p style={{ color:G.textSecondary, fontSize:13, marginBottom:6, lineHeight:1.6 }}>Votre paiement a été soumis à l'équipe FichesPro pour vérification.</p>
+            <div style={{ background:"rgba(245,158,11,.08)", border:"1px solid rgba(245,158,11,.25)", borderRadius:12, padding:"12px 15px", marginBottom:13, textAlign:"left" }}>
+              <div style={{ fontSize:12, fontWeight:700, color:G.gold, marginBottom:6 }}>⏳ Processus de validation</div>
+              <div style={{ fontSize:12, color:G.textSecondary, lineHeight:1.7 }}>
+                1. Notre équipe vérifie votre transaction<br/>
+                2. Validation sous <b style={{ color:G.textPrimary }}>15–30 minutes</b><br/>
+                3. Votre abonnement sera activé automatiquement<br/>
+                4. Vous recevrez une confirmation sur WhatsApp
+              </div>
+            </div>
             <div style={{ background:"rgba(79,125,255,.08)", border:"1px solid rgba(79,125,255,.2)", borderRadius:12, padding:"12px 15px", marginBottom:16, textAlign:"left" }}>
               <div style={{ fontSize:12, fontWeight:700, color:G.accent, marginBottom:8 }}>📞 Besoin d'aide ?</div>
               <a href={"https://wa.me/"+support.whatsapp} target="_blank" rel="noreferrer" style={{ display:"flex", alignItems:"center", gap:8, color:"#25d366", fontWeight:700, fontSize:13, textDecoration:"none", marginBottom:7 }}>
@@ -751,8 +766,9 @@ function getSession() {
 }
 
 // ─── SUPABASE AUTH + DB ───────────────────────────────────────────────────────
+
+// CORRECTION P3 : Inscription sans confirmation email obligatoire
 async function supaRegister(nom, email, pwd) {
-  // 1. Créer le compte Auth Supabase
   var { data, error } = await supa.auth.signUp({
     email: email,
     password: pwd,
@@ -760,7 +776,7 @@ async function supaRegister(nom, email, pwd) {
   });
   if (error) throw new Error(error.message);
 
-  // 2. Insérer le profil dans la table users
+  // Insérer profil immédiatement (trigger le fait aussi)
   if (data.user) {
     await supa.from("users").upsert({
       id: data.user.id,
@@ -768,44 +784,51 @@ async function supaRegister(nom, email, pwd) {
       email: email,
       role: "user",
       date_inscription: new Date().toISOString(),
-    });
+    }, { onConflict: "id" });
   }
+  // Sauvegarder aussi en local comme fallback
+  saveCompteLocal({ nom, email, pwd, role:"user", dateInscription: new Date().toISOString() });
   return { role:"user", nom, email, id: data.user?.id };
 }
 
 async function supaLogin(email, pwd) {
-  // Compte admin fixe
   if (email === "admin@fichespro.com" && pwd === "admin123") {
     return { role:"admin", nom:"Administrateur", email };
   }
-
   var { data, error } = await supa.auth.signInWithPassword({ email, password: pwd });
   if (error) throw new Error("Email ou mot de passe incorrect.");
-
-  // Récupérer le profil depuis la table users
   var { data: profil } = await supa.from("users").select("*").eq("id", data.user.id).single();
-  var nom = profil?.nom || data.user.user_metadata?.nom || "Utilisateur";
+  var nom = profil?.nom || data.user.user_metadata?.nom || email.split("@")[0];
+  // Mettre à jour le nom si manquant
+  if (!profil?.nom) {
+    await supa.from("users").upsert({
+      id: data.user.id, nom, email,
+      role: "user", date_inscription: new Date().toISOString()
+    }, { onConflict: "id" });
+  }
+  saveCompteLocal({ nom, email, pwd, role: profil?.role||"user" });
   return { role: profil?.role||"user", nom, email, id: data.user.id };
 }
 
 async function supaResetPassword(email) {
   var { error } = await supa.auth.resetPasswordForEmail(email, {
-    redirectTo: window.location.origin + "/reset-password",
+    redirectTo: (typeof window !== "undefined" ? window.location.origin : "") + "/reset-password",
   });
   if (error) throw new Error(error.message);
 }
 
 async function supaUpdateProfile(userId, nom, email) {
-  if (userId) {
+  if (!userId) return;
+  try {
     await supa.from("users").update({ nom, email }).eq("id", userId);
-    await supa.auth.updateUser({ email, data: { nom } });
-  }
+    await supa.auth.updateUser({ data: { nom } });
+  } catch(e) {}
 }
 
 // ─── DONNÉES SUPABASE ─────────────────────────────────────────────────────────
 async function supaGetFiches() {
-  var { data, error } = await supa.from("fiches").select("*").order("created_at", { ascending:false });
-  if (error || !data || data.length === 0) return null; // fallback sur FICHES local
+  var { data, error } = await supa.from("fiches").select("*").order("id", { ascending:true });
+  if (error || !data || data.length === 0) return null;
   return data.map(function(f) {
     return {
       id: f.id, titre: f.titre, matiere: f.matiere, matiereId: f.matiere_id,
@@ -833,29 +856,34 @@ async function supaToggleFavori(userId, ficheId, estFavori) {
 
 async function supaLogTelecharger(userId, ficheId) {
   if (!userId) return;
-  await supa.from("historique_telechargements").insert({
-    user_id: userId, fiche_id: ficheId, date: new Date().toISOString()
-  });
-  await supa.from("fiches").update({ nb_telechargements: supa.rpc("increment") }).eq("id", ficheId);
+  try {
+    await supa.from("historique_telechargements").insert({
+      user_id: userId, fiche_id: ficheId, date: new Date().toISOString()
+    });
+    // Incrémenter le compteur de téléchargements
+    await supa.rpc("increment_telechargements", { fiche_id_param: ficheId });
+  } catch(e) {}
 }
 
 async function supaGetTickets(userId) {
   if (!userId) return [];
-  var { data } = await supa.from("tickets").select("*, messages_ticket(*)").eq("user_id", userId).order("created_at", { ascending:false });
+  var { data } = await supa.from("tickets")
+    .select("*, messages_ticket(*)")
+    .eq("user_id", userId)
+    .order("created_at", { ascending:false });
   return data || [];
 }
 
 async function supaCreateTicket(userId, userName, userEmail, sujet, message) {
-  var { data: ticket } = await supa.from("tickets").insert({
+  var { data: ticket, error } = await supa.from("tickets").insert({
     user_id: userId, user_name: userName, user_email: userEmail,
     sujet, statut: "Nouveau", created_at: new Date().toISOString()
   }).select().single();
-  if (ticket) {
-    await supa.from("messages_ticket").insert({
-      ticket_id: ticket.id, auteur: "user", nom: userName,
-      texte: message, lu: false, created_at: new Date().toISOString()
-    });
-  }
+  if (error || !ticket) return null;
+  await supa.from("messages_ticket").insert({
+    ticket_id: ticket.id, auteur: "user", nom: userName,
+    texte: message, lu: false, created_at: new Date().toISOString()
+  });
   return ticket;
 }
 
@@ -863,7 +891,79 @@ async function supaAddMessage(ticketId, auteur, nom, texte) {
   await supa.from("messages_ticket").insert({
     ticket_id: ticketId, auteur, nom, texte, lu: false, created_at: new Date().toISOString()
   });
-  await supa.from("tickets").update({ statut: auteur==="admin"?"En cours":"Nouveau" }).eq("id", ticketId);
+  await supa.from("tickets").update({
+    statut: auteur==="admin" ? "En cours" : "Nouveau",
+    updated_at: new Date().toISOString()
+  }).eq("id", ticketId);
+}
+
+// CORRECTION P4 : Charger et sauvegarder les paramètres depuis Supabase
+async function supaGetParametres() {
+  var { data } = await supa.from("parametres").select("*").eq("id", 1).single();
+  if (!data) return null;
+  return {
+    paiement: {
+      mtn:     { numero: data.paie_mtn_numero,     nom: data.paie_mtn_nom     },
+      moov:    { numero: data.paie_moov_numero,    nom: data.paie_moov_nom    },
+      celtiis: { numero: data.paie_celtiis_numero, nom: data.paie_celtiis_nom },
+    },
+    support: { whatsapp: data.support_whatsapp, telegram: data.support_telegram },
+    abonnement: { prix: data.abo_prix, ficheGratuites: data.abo_gratuits, dureeJours: data.abo_jours, delaiActivMin: data.abo_delai },
+  };
+}
+
+async function supaSaveParametres(cfg) {
+  await supa.from("parametres").upsert({
+    id: 1,
+    paie_mtn_numero:     cfg.paiement.mtn.numero,
+    paie_mtn_nom:        cfg.paiement.mtn.nom,
+    paie_moov_numero:    cfg.paiement.moov.numero,
+    paie_moov_nom:       cfg.paiement.moov.nom,
+    paie_celtiis_numero: cfg.paiement.celtiis.numero,
+    paie_celtiis_nom:    cfg.paiement.celtiis.nom,
+    support_whatsapp:    cfg.support.whatsapp,
+    support_telegram:    cfg.support.telegram,
+    abo_prix:            cfg.abonnement.prix,
+    abo_gratuits:        cfg.abonnement.ficheGratuites,
+    abo_jours:           cfg.abonnement.dureeJours,
+    abo_delai:           cfg.abonnement.delaiActivMin,
+    updated_at:          new Date().toISOString(),
+  }, { onConflict: "id" });
+}
+
+// CORRECTION P5 : Soumettre une demande d'abonnement pour validation admin
+async function supaDemanderAbonnement(userId, userNom, userEmail, preuve, telephone, montant, methode) {
+  var { data } = await supa.from("paiements").insert({
+    user_id: userId,
+    montant: montant,
+    methode: methode,
+    reference_transaction: preuve,
+    nom_payeur: userNom,
+    telephone: telephone,
+    statut: "en_attente",
+    created_at: new Date().toISOString(),
+  }).select().single();
+  return data;
+}
+
+async function supaValiderAbonnement(paiementId, userId) {
+  // Activer l'abonnement dans la table users
+  var dateFin = new Date();
+  dateFin.setFullYear(dateFin.getFullYear() + 1);
+  await supa.from("users").update({
+    abonnement_actif: true,
+    abonnement_expire: dateFin.toISOString(),
+  }).eq("id", userId);
+  // Confirmer le paiement
+  await supa.from("paiements").update({ statut: "confirme" }).eq("id", paiementId);
+}
+
+async function supaGetPaiementsEnAttente() {
+  var { data } = await supa.from("paiements")
+    .select("*, users(nom, email)")
+    .eq("statut", "en_attente")
+    .order("created_at", { ascending:false });
+  return data || [];
 }
 
 // ─── AUTH ─────────────────────────────────────────────────────────────────────
@@ -1308,7 +1408,13 @@ function UserApp({ user, onLogout, appCfg, setUser }) {
     <>
       {toast && <Toast msg={toast.msg} type={toast.type} onClose={function() { setToast(null); }} />}
       {ficheActive && <FicheModal fiche={ficheActive} abonne={abonne} onClose={function() { setFicheActive(null); }} onTelecharger={function(f) { telecharger(f); setFicheActive(null); }} favori={!!favoris.find(function(x){return x.id===ficheActive.id;})} onFavori={toggleFavori} onPartager={partagerFiche} onNoter={noterFiche} noteUtilisateur={notesUtilisateur[ficheActive?.id]} />}
-      {showAbo && <PaiementModal onClose={function() { setShowAbo(false); }} onSuccess={function() { setAbonne(true); setShowAbo(false); showT("Abonnement en vérification - activation sous "+aboCfg.delaiActivMin+" min", "info"); showT("💎 Badge débloqué : Membre Premium !", "info"); }} cfg={paieCfg} prix={prixAvecPromo()} supportCfg={supportCfg} />}
+      {showAbo && <PaiementModal onClose={function() { setShowAbo(false); }} onSuccess={function() { setShowAbo(false); showT("Demande soumise ! Votre abonnement sera activé après validation sous "+aboCfg.delaiActivMin+" min ⏳", "info"); }} cfg={paieCfg} prix={prixAvecPromo()} supportCfg={supportCfg} onSubmitPaie={async function(nom, phone, preuve, methode, montant) {
+        if (user.id) {
+          try {
+            await supaDemanderAbonnement(user.id, user.nom, user.email, preuve, phone, montant, methode);
+          } catch(e) {}
+        }
+      }} />}
       {showDemande && <DemandeModal onClose={function() { setShowDemande(false); }} onSubmit={function() { setShowDemande(false); showT("Demande envoyée ! Réponse sous 48h", "success"); }} />}
       {showImprimee && <ImprimeeModal plan={showImprimee} onClose={function() { setShowImprimee(null); }} cfg={paieCfg} supportCfg={supportCfg} />}
 
@@ -2213,6 +2319,14 @@ function AdminApp({ user, onLogout, appCfg, setAppCfg }) {
   const [tickets, setTickets] = useState(TICKETS_DEMO);
   const [ticketOuvert, setTicketOuvert] = useState(null);
   const [reponseAdmin, setReponseAdmin] = useState("");
+  const [paiementsEnAttente, setPaiementsEnAttente] = useState([]);
+
+  // Charger les paiements en attente depuis Supabase
+  useEffect(function() {
+    supaGetPaiementsEnAttente().then(function(data) {
+      if (data && data.length > 0) setPaiementsEnAttente(data);
+    }).catch(function() {});
+  }, []);
 
   // Édition locale des paramètres (synchronisée depuis appCfg)
   const [paieEdit, setPaieEdit] = useState({
@@ -2817,26 +2931,85 @@ function AdminApp({ user, onLogout, appCfg, setAppCfg }) {
 
         {tab==="paiements" && (
           <div>
-            <h1 className="fd" style={{ fontSize:20, fontWeight:800, marginBottom:20 }}>Paiements</h1>
+            <h1 className="fd" style={{ fontSize:20, fontWeight:800, marginBottom:6 }}>Paiements & Validation abonnements</h1>
+            <p style={{ color:G.textMuted, fontSize:13, marginBottom:18 }}>Validez les abonnements des utilisateurs après vérification du paiement Mobile Money.</p>
+
+            {/* Paiements en attente de validation */}
+            {paiementsEnAttente.length > 0 && (
+              <div style={{ marginBottom:22 }}>
+                <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:12 }}>
+                  <h2 className="fd" style={{ fontSize:15, fontWeight:700 }}>⏳ En attente de validation</h2>
+                  <span style={{ background:G.danger, color:"#fff", fontSize:11, fontWeight:800, padding:"2px 8px", borderRadius:10 }}>{paiementsEnAttente.length}</span>
+                </div>
+                <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+                  {paiementsEnAttente.map(function(p) {
+                    return (
+                      <div key={p.id} className="card" style={{ border:"1px solid rgba(245,158,11,.3)", background:"rgba(245,158,11,.05)" }}>
+                        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", flexWrap:"wrap", gap:12 }}>
+                          <div style={{ flex:1 }}>
+                            <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:6 }}>
+                              <span style={{ fontFamily:"monospace", color:G.accentLight, fontWeight:700 }}>#{p.id}</span>
+                              <span className="badge b-warn">En attente</span>
+                            </div>
+                            <div style={{ fontWeight:700, fontSize:15, marginBottom:4 }}>{p.users?.nom || p.nom_payeur || "Utilisateur"}</div>
+                            <div style={{ fontSize:12, color:G.textMuted, marginBottom:4 }}>{p.users?.email || "—"}</div>
+                            <div style={{ display:"flex", gap:12, flexWrap:"wrap" }}>
+                              <span style={{ fontSize:12, color:G.textSecondary }}>💰 <b style={{ color:G.textPrimary }}>{(p.montant||0).toLocaleString("fr-FR")} FCFA</b></span>
+                              <span style={{ fontSize:12, color:G.textSecondary }}>📱 <b style={{ color:G.textPrimary }}>{p.methode?.toUpperCase()}</b></span>
+                              <span style={{ fontSize:12, color:G.textSecondary }}>📞 {p.telephone}</span>
+                            </div>
+                            {p.reference_transaction && (
+                              <div style={{ marginTop:8, padding:"6px 10px", background:"rgba(79,125,255,.1)", borderRadius:8, fontSize:12 }}>
+                                🔖 Référence transaction : <b style={{ color:G.accentLight, fontFamily:"monospace" }}>{p.reference_transaction}</b>
+                              </div>
+                            )}
+                            <div style={{ fontSize:11, color:G.textMuted, marginTop:6 }}>Soumis le {new Date(p.created_at).toLocaleDateString("fr-FR")} à {new Date(p.created_at).toLocaleTimeString("fr-FR",{hour:"2-digit",minute:"2-digit"})}</div>
+                          </div>
+                          <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+                            <button className="btn btn-ok" onClick={async function() {
+                              if (window.confirm("Valider l'abonnement de " + (p.users?.nom||p.nom_payeur) + " ?")) {
+                                try {
+                                  await supaValiderAbonnement(p.id, p.user_id);
+                                  setPaiementsEnAttente(function(prev) { return prev.filter(function(x){ return x.id!==p.id; }); });
+                                  showT("✅ Abonnement validé pour "+(p.users?.nom||p.nom_payeur),"success");
+                                } catch(e) {
+                                  showT("Erreur lors de la validation","error");
+                                }
+                              }
+                            }}>✅ Valider</button>
+                            <button className="btn btn-d btn-sm" onClick={async function() {
+                              if (window.confirm("Rejeter ce paiement ?")) {
+                                try {
+                                  await supa.from("paiements").update({ statut:"echec" }).eq("id", p.id);
+                                  setPaiementsEnAttente(function(prev) { return prev.filter(function(x){ return x.id!==p.id; }); });
+                                  showT("Paiement rejeté","warning");
+                                } catch(e) {}
+                              }
+                            }}>✕ Rejeter</button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Historique paiements confirmés */}
+            <h2 className="fd" style={{ fontSize:15, fontWeight:700, marginBottom:12 }}>✅ Historique des paiements</h2>
             <div className="card" style={{ overflowX:"auto" }}>
               <table>
                 <thead><tr><th>ID</th><th>Utilisateur</th><th>Montant</th><th>Méthode</th><th>Date</th><th>Statut</th></tr></thead>
                 <tbody>
-                  {[
-                    { id:"#4821",u:"Kouassi Amara",    m:"MTN MoMo",   d:"2024-02-14",ok:true  },
-                    { id:"#4820",u:"Koffi Jean-Pierre",m:"Moov Money", d:"2024-02-13",ok:true  },
-                    { id:"#4819",u:"Sossou Marie",     m:"Celtiis",    d:"2024-02-12",ok:false },
-                    { id:"#4818",u:"Bello Fatima",     m:"MTN MoMo",   d:"2024-02-11",ok:true  },
-                    { id:"#4817",u:"Akpo Rodrigue",    m:"Moov Money", d:"2024-02-10",ok:true  },
-                  ].map(function(p) {
+                  {PAIEMENTS_DEMO.map(function(p) {
                     return (
                       <tr key={p.id}>
-                        <td style={{ fontFamily:"monospace",color:G.accent,fontWeight:700 }}>{p.id}</td>
+                        <td style={{ fontFamily:"monospace", color:G.accent, fontWeight:700 }}>{p.id}</td>
                         <td style={{ fontWeight:600 }}>{p.u}</td>
-                        <td style={{ fontWeight:700 }}>2 000 FCFA</td>
+                        <td style={{ fontWeight:700 }}>3 000 FCFA</td>
                         <td style={{ color:G.textMuted }}>{p.m}</td>
                         <td style={{ color:G.textMuted }}>{new Date(p.d).toLocaleDateString("fr-FR")}</td>
-                        <td><span className={"badge "+(p.ok?"b-ok":"b-err")}>{p.ok?"Succès":"Échoué"}</span></td>
+                        <td><span className={"badge "+(p.ok?"b-ok":"b-err")}>{p.ok?"Validé":"Rejeté"}</span></td>
                       </tr>
                     );
                   })}
@@ -3342,8 +3515,6 @@ function AdminApp({ user, onLogout, appCfg, setAppCfg }) {
 // ─── ROOT ─────────────────────────────────────────────────────────────────────
 export default function App() {
   const [user, setUser] = useState(null);
-
-  // ── État global des paramètres (admin peut modifier, users voient en temps réel)
   const [appCfg, setAppCfg] = useState({
     paiement: {
       mtn:     { numero: DEFAULT_CFG.mtn.numero,     nom: DEFAULT_CFG.mtn.nom     },
@@ -3363,15 +3534,53 @@ export default function App() {
     plansImprimes: PLANS_IMPRIMES.map(function(p) { return Object.assign({}, p); }),
   });
 
+  // CORRECTION P4 : Charger les paramètres depuis Supabase au démarrage
+  useEffect(function() {
+    supaGetParametres().then(function(cfg) {
+      if (cfg) {
+        setAppCfg(function(prev) {
+          return Object.assign({}, prev, {
+            paiement: cfg.paiement,
+            support: cfg.support,
+            abonnement: Object.assign({}, prev.abonnement, cfg.abonnement),
+          });
+        });
+      }
+    }).catch(function() {});
+  }, []);
+
+  // CORRECTION P2 : Déconnexion propre sans perdre la session Supabase complètement
+  async function handleLogout() {
+    try {
+      await supa.auth.signOut();
+    } catch(e) {}
+    clearSession();
+    setUser(null);
+  }
+
+  // CORRECTION P4 : Sauvegarder les paramètres dans Supabase + état local
+  function handleSetAppCfg(newCfg) {
+    if (typeof newCfg === "function") {
+      setAppCfg(function(prev) {
+        var updated = newCfg(prev);
+        supaSaveParametres(updated).catch(function() {});
+        return updated;
+      });
+    } else {
+      supaSaveParametres(newCfg).catch(function() {});
+      setAppCfg(newCfg);
+    }
+  }
+
   return (
     <>
       <style>{css}</style>
       {!user && <AuthScreen onLogin={setUser} />}
       {user && user.role === "admin" && (
-        <AdminApp user={user} onLogout={function() { clearSession(); setUser(null); }} appCfg={appCfg} setAppCfg={setAppCfg} />
+        <AdminApp user={user} onLogout={handleLogout} appCfg={appCfg} setAppCfg={handleSetAppCfg} />
       )}
       {user && user.role === "user" && (
-        <UserApp user={user} onLogout={function() { clearSession(); setUser(null); }} appCfg={appCfg} setUser={setUser} />
+        <UserApp user={user} onLogout={handleLogout} appCfg={appCfg} setUser={setUser} />
       )}
     </>
   );
