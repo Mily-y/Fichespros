@@ -966,6 +966,73 @@ async function supaGetPaiementsEnAttente() {
   return data || [];
 }
 
+// ─── STORAGE PDF ──────────────────────────────────────────────────────────────
+async function supaUploadPdf(file, ficheId) {
+  if (!file) return null;
+  var ext = file.name.split(".").pop();
+  var nomFichier = "fiche-" + ficheId + "-" + Date.now() + "." + ext;
+  var { data, error } = await supa.storage
+    .from("fiches-pdf")
+    .upload(nomFichier, file, { cacheControl: "3600", upsert: true });
+  if (error) throw new Error("Erreur upload PDF : " + error.message);
+  var { data: urlData } = supa.storage.from("fiches-pdf").getPublicUrl(nomFichier);
+  return urlData.publicUrl;
+}
+
+async function supaCreateFiche(ficheData, file) {
+  var { data: nouvelleFiche, error } = await supa.from("fiches").insert({
+    titre: ficheData.titre,
+    matiere: ficheData.matiere,
+    matiere_id: ficheData.matiereId,
+    niveau: ficheData.niveau,
+    pages: ficheData.pages || 1,
+    premium: ficheData.premium || false,
+    note: ficheData.note || 4.5,
+    nb_telechargements: 0,
+    description: ficheData.description || "",
+  }).select().single();
+  if (error) throw new Error(error.message);
+
+  if (file && nouvelleFiche) {
+    var url = await supaUploadPdf(file, nouvelleFiche.id);
+    if (url) {
+      await supa.from("fiches").update({
+        fichier_url: url,
+        fichier_nom: file.name,
+      }).eq("id", nouvelleFiche.id);
+      nouvelleFiche.fichier_url = url;
+      nouvelleFiche.fichier_nom = file.name;
+    }
+  }
+  return nouvelleFiche;
+}
+
+async function supaUpdateFiche(ficheId, ficheData, file) {
+  var updateData = {
+    titre: ficheData.titre,
+    matiere: ficheData.matiere,
+    matiere_id: ficheData.matiereId,
+    niveau: ficheData.niveau,
+    pages: ficheData.pages || 1,
+    premium: ficheData.premium || false,
+    note: ficheData.note || 4.5,
+    description: ficheData.description || "",
+  };
+  if (file) {
+    var url = await supaUploadPdf(file, ficheId);
+    if (url) {
+      updateData.fichier_url = url;
+      updateData.fichier_nom = file.name;
+    }
+  }
+  var { error } = await supa.from("fiches").update(updateData).eq("id", ficheId);
+  if (error) throw new Error(error.message);
+}
+
+async function supaDeleteFiche(ficheId) {
+  await supa.from("fiches").delete().eq("id", ficheId);
+}
+
 // ─── AUTH ─────────────────────────────────────────────────────────────────────
 function AuthScreen({ onLogin }) {
   const [mode, setMode] = useState("login");
@@ -1343,7 +1410,13 @@ function UserApp({ user, onLogout, appCfg, setUser }) {
     });
     // Logger dans Supabase
     if (user.id) supaLogTelecharger(user.id, f.id).catch(function(){});
-    showT(f.titre + " téléchargé ✅", "success");
+    // Ouvrir le vrai PDF si disponible
+    if (f.fichierUrl) {
+      window.open(f.fichierUrl, "_blank");
+      showT(f.titre + " — PDF ouvert 📄", "success");
+    } else {
+      showT(f.titre + " téléchargé ✅ (PDF de démonstration)", "success");
+    }
     if (nvHist.length === 1) showT("🎯 Badge débloqué : Premier téléchargement !", "info");
     if (nvHist.length === 5) showT("📚 Badge débloqué : Lecteur !", "info");
     if (nvHist.length === 10) showT("🏆 Badge débloqué : Expert !", "info");
@@ -2301,6 +2374,17 @@ function AdminApp({ user, onLogout, appCfg, setAppCfg }) {
   const [tab, setTab] = useState("stats");
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [fiches, setFiches] = useState(FICHES);
+
+  // Charger les vraies fiches depuis Supabase au démarrage
+  useEffect(function() {
+    supaGetFiches().then(function(data) {
+      if (data && data.length > 0) {
+        setFiches(data.map(function(f) {
+          return Object.assign({}, f, { dl: f.dl, date: new Date().toISOString().split("T")[0] });
+        }));
+      }
+    }).catch(function() {});
+  }, []);
   const [toast, setToast] = useState(null);
   const [saved, setSaved] = useState(false);
 
@@ -2311,6 +2395,7 @@ function AdminApp({ user, onLogout, appCfg, setAppCfg }) {
   const [showFormFiche, setShowFormFiche] = useState(null);
   const [formFiche, setFormFiche] = useState(formVide);
   const [searchFiche, setSearchFiche] = useState("");
+  const [ficheUploading, setFicheUploading] = useState(false);
   const [docsParMatiere, setDocsParMatiere] = useState({});
   const [uploadingMat, setUploadingMat] = useState(null);
   const [userDetail, setUserDetail] = useState(null);
@@ -2634,48 +2719,89 @@ function AdminApp({ user, onLogout, appCfg, setAppCfg }) {
                 <div style={{ display:"flex", gap:10 }}>
                   <button className="btn btn-s" style={{ flex:1 }} onClick={function(){ setShowFormFiche(null); setFormFiche(formVide); }}>Annuler</button>
                   <button className="btn btn-p" style={{ flex:2 }}
-                    disabled={!formFiche.titre || !formFiche.matiere || !formFiche.niveau}
-                    onClick={function(){
-                      if(showFormFiche.mode==="add"){
-                        var matObj=MATIERES.find(function(m){ return m.id===formFiche.matiere; });
-                        var newFiche={
-                          id: Date.now(),
-                          titre: formFiche.titre,
-                          matiere: matObj ? matObj.label : formFiche.matiere,
-                          matiereId: formFiche.matiere,
-                          niveau: formFiche.niveau,
-                          pages: formFiche.pages||1,
-                          premium: formFiche.premium,
-                          note: formFiche.note||4.5,
-                          dl: 0,
-                          description: formFiche.description,
-                          fichierNom: formFiche.fichierNom||"",
-                          date: new Date().toISOString().split("T")[0],
-                        };
-                        setFiches(function(prev){ return [newFiche, ...prev]; });
-                        showT("Fiche \""+formFiche.titre+"\" ajoutée avec succès !","success");
-                      } else {
-                        setFiches(function(prev){ return prev.map(function(f){
-                          if(f.id!==showFormFiche.fiche.id) return f;
-                          var matObj=MATIERES.find(function(m){ return m.id===formFiche.matiere; });
-                          return {...f,
+                    disabled={!formFiche.titre || !formFiche.matiere || !formFiche.niveau || ficheUploading}
+                    onClick={async function(){
+                      var matObj=MATIERES.find(function(m){ return m.id===formFiche.matiere; });
+                      setFicheUploading(true);
+                      try {
+                        if(showFormFiche.mode==="add"){
+                          var ficheDataSupa = {
                             titre: formFiche.titre,
-                            matiere: matObj ? matObj.label : f.matiere,
+                            matiere: matObj ? matObj.label : formFiche.matiere,
                             matiereId: formFiche.matiere,
                             niveau: formFiche.niveau,
-                            pages: formFiche.pages||f.pages,
+                            pages: formFiche.pages||1,
                             premium: formFiche.premium,
-                            note: formFiche.note||f.note,
+                            note: formFiche.note||4.5,
                             description: formFiche.description,
-                            fichierNom: formFiche.fichierNom||f.fichierNom||"",
                           };
-                        }); });
-                        showT("Fiche modifiée avec succès !","success");
+                          var ficheCreee = await supaCreateFiche(ficheDataSupa, formFiche.fichierObj);
+                          var newFiche = {
+                            id: ficheCreee ? ficheCreee.id : Date.now(),
+                            titre: formFiche.titre,
+                            matiere: matObj ? matObj.label : formFiche.matiere,
+                            matiereId: formFiche.matiere,
+                            niveau: formFiche.niveau,
+                            pages: formFiche.pages||1,
+                            premium: formFiche.premium,
+                            note: formFiche.note||4.5,
+                            dl: 0,
+                            description: formFiche.description,
+                            fichierNom: formFiche.fichierNom||"",
+                            fichierUrl: ficheCreee ? ficheCreee.fichier_url||"" : "",
+                            date: new Date().toISOString().split("T")[0],
+                          };
+                          setFiches(function(prev){ return [newFiche, ...prev]; });
+                          showT("Fiche \""+formFiche.titre+"\" ajoutée avec succès !"+(formFiche.fichierObj?" 📄 PDF uploadé":""),"success");
+                        } else {
+                          var ficheId = showFormFiche.fiche.id;
+                          var ficheDataSupa2 = {
+                            titre: formFiche.titre,
+                            matiere: matObj ? matObj.label : formFiche.matiere,
+                            matiereId: formFiche.matiere,
+                            niveau: formFiche.niveau,
+                            pages: formFiche.pages,
+                            premium: formFiche.premium,
+                            note: formFiche.note,
+                            description: formFiche.description,
+                          };
+                          await supaUpdateFiche(ficheId, ficheDataSupa2, formFiche.fichierObj);
+                          setFiches(function(prev){ return prev.map(function(f){
+                            if(f.id!==ficheId) return f;
+                            return {...f,
+                              titre: formFiche.titre,
+                              matiere: matObj ? matObj.label : f.matiere,
+                              matiereId: formFiche.matiere,
+                              niveau: formFiche.niveau,
+                              pages: formFiche.pages||f.pages,
+                              premium: formFiche.premium,
+                              note: formFiche.note||f.note,
+                              description: formFiche.description,
+                              fichierNom: formFiche.fichierNom||f.fichierNom||"",
+                            };
+                          }); });
+                          showT("Fiche modifiée avec succès !"+(formFiche.fichierObj?" 📄 Nouveau PDF uploadé":""),"success");
+                        }
+                      } catch(err) {
+                        showT("Erreur : "+err.message,"error");
+                        // Fallback local si Supabase échoue
+                        if(showFormFiche.mode==="add"){
+                          var newFicheFallback = {
+                            id: Date.now(), titre: formFiche.titre,
+                            matiere: matObj ? matObj.label : formFiche.matiere,
+                            matiereId: formFiche.matiere, niveau: formFiche.niveau,
+                            pages: formFiche.pages||1, premium: formFiche.premium,
+                            note: formFiche.note||4.5, dl: 0, description: formFiche.description,
+                            fichierNom: formFiche.fichierNom||"", date: new Date().toISOString().split("T")[0],
+                          };
+                          setFiches(function(prev){ return [newFicheFallback, ...prev]; });
+                        }
                       }
+                      setFicheUploading(false);
                       setShowFormFiche(null);
                       setFormFiche(formVide);
                     }}>
-                    {showFormFiche.mode==="add" ? "✅ Publier la fiche" : "✅ Enregistrer les modifications"}
+                    {ficheUploading ? "⏳ Envoi en cours..." : (showFormFiche.mode==="add" ? "✅ Publier la fiche" : "✅ Enregistrer les modifications")}
                   </button>
                 </div>
               </div>
@@ -2742,8 +2868,9 @@ function AdminApp({ user, onLogout, appCfg, setAppCfg }) {
                               setShowFormFiche({mode:"edit", fiche:f});
                               window.scrollTo({top:0, behavior:"smooth"});
                             }}>✏️</button>
-                            <button className="btn btn-d btn-sm" title="Supprimer" onClick={function() {
+                            <button className="btn btn-d btn-sm" title="Supprimer" onClick={async function() {
                               if(window.confirm("Supprimer \""+f.titre+"\" ? Cette action est irréversible.")) {
+                                try { await supaDeleteFiche(f.id); } catch(e) {}
                                 setFiches(function(prev) { return prev.filter(function(x) { return x.id !== f.id; }); });
                                 showT("Fiche supprimée","warning");
                               }
