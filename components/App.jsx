@@ -2320,12 +2320,36 @@ function AdminApp({ user, onLogout, appCfg, setAppCfg }) {
   const [ticketOuvert, setTicketOuvert] = useState(null);
   const [reponseAdmin, setReponseAdmin] = useState("");
   const [paiementsEnAttente, setPaiementsEnAttente] = useState([]);
+  const [usersSupabase, setUsersSupabase] = useState([]);
+  const [usersLoading, setUsersLoading] = useState(true);
+  const [searchUser, setSearchUser] = useState("");
 
-  // Charger les paiements en attente depuis Supabase
+  // Charger les utilisateurs depuis Supabase
   useEffect(function() {
-    supaGetPaiementsEnAttente().then(function(data) {
-      if (data && data.length > 0) setPaiementsEnAttente(data);
-    }).catch(function() {});
+    async function chargerUsers() {
+      setUsersLoading(true);
+      try {
+        var { data, error } = await supa.from("users").select("*").order("date_inscription", { ascending:false });
+        if (!error && data && data.length > 0) {
+          setUsersSupabase(data);
+        } else {
+          // Fallback données demo
+          setUsersSupabase(USERS_ADMIN.map(function(u) {
+            return { id:u.id, nom:u.nom, email:u.email, role:"user",
+              abonnement_actif: u.statut==="Abonné",
+              date_inscription: u.joinDate, nb_fiches: u.fiches };
+          }));
+        }
+      } catch(e) {
+        setUsersSupabase(USERS_ADMIN.map(function(u) {
+          return { id:u.id, nom:u.nom, email:u.email, role:"user",
+            abonnement_actif: u.statut==="Abonné",
+            date_inscription: u.joinDate, nb_fiches: u.fiches };
+        }));
+      }
+      setUsersLoading(false);
+    }
+    chargerUsers();
   }, []);
 
   // Édition locale des paramètres (synchronisée depuis appCfg)
@@ -2876,26 +2900,76 @@ function AdminApp({ user, onLogout, appCfg, setAppCfg }) {
 
         {tab==="users" && (
           <div>
-            <h1 className="fd" style={{ fontSize:20, fontWeight:800, marginBottom:20 }}>Utilisateurs</h1>
-            <div className="card" style={{ overflowX:"auto" }}>
-              <table>
-                <thead><tr><th>Nom</th><th>Email</th><th>Statut</th><th>Fiches</th><th>Inscrit le</th><th>Action</th></tr></thead>
-                <tbody>
-                  {USERS_ADMIN.map(function(u) {
-                    return (
-                      <tr key={u.id}>
-                        <td style={{ fontWeight:700 }}>{u.nom}</td>
-                        <td style={{ color:G.textMuted }}>{u.email}</td>
-                        <td><span className={"badge "+(u.statut==="Abonné"?"b-gold":u.statut==="Expiré"?"b-err":"b-free")}>{u.statut}</span></td>
-                        <td style={{ fontWeight:700 }}>{u.fiches}</td>
-                        <td style={{ color:G.textMuted }}>{new Date(u.joinDate).toLocaleDateString("fr-FR")}</td>
-                        <td><button className="btn btn-s btn-sm" onClick={function(){ setUserDetail(u); }}>Voir</button></td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16, flexWrap:"wrap", gap:10 }}>
+              <h1 className="fd" style={{ fontSize:20, fontWeight:800 }}>
+                Utilisateurs
+                <span style={{ fontSize:13, fontWeight:600, color:G.textMuted, marginLeft:10 }}>({usersSupabase.length})</span>
+              </h1>
+              <button className="btn btn-s btn-sm" onClick={async function(){
+                setUsersLoading(true);
+                try {
+                  var { data } = await supa.from("users").select("*").order("date_inscription",{ascending:false});
+                  if(data && data.length>0) setUsersSupabase(data);
+                } catch(e){}
+                setUsersLoading(false);
+                showT("Liste actualisée","success");
+              }}>🔄 Actualiser</button>
             </div>
+
+            {/* Recherche */}
+            <div className="sbar" style={{ marginBottom:14 }}>
+              <span style={{ color:G.textMuted }}>🔍</span>
+              <input value={searchUser} onChange={function(e){ setSearchUser(e.target.value); }} placeholder="Rechercher un utilisateur..." />
+              {searchUser && <button onClick={function(){ setSearchUser(""); }} style={{ background:"none", border:"none", color:G.textMuted, cursor:"pointer" }}>×</button>}
+            </div>
+
+            {usersLoading ? (
+              <div style={{ textAlign:"center", padding:"40px", color:G.textMuted }}>
+                <div style={{ fontSize:32, marginBottom:10 }}>⏳</div>
+                <p>Chargement des utilisateurs...</p>
+              </div>
+            ) : (
+              <div className="card" style={{ overflowX:"auto" }}>
+                <table>
+                  <thead><tr><th>Nom</th><th>Email</th><th>Rôle</th><th>Abonnement</th><th>Inscrit le</th><th>Action</th></tr></thead>
+                  <tbody>
+                    {usersSupabase.filter(function(u){
+                      if(!searchUser) return true;
+                      var q = searchUser.toLowerCase();
+                      return (u.nom||"").toLowerCase().includes(q) || (u.email||"").toLowerCase().includes(q);
+                    }).map(function(u) {
+                      var statut = u.abonnement_actif ? "Abonné" : "Gratuit";
+                      var dateInscr = u.date_inscription ? new Date(u.date_inscription).toLocaleDateString("fr-FR") : "—";
+                      return (
+                        <tr key={u.id}>
+                          <td style={{ fontWeight:700 }}>{u.nom||"—"}</td>
+                          <td style={{ color:G.textMuted, fontSize:12 }}>{u.email}</td>
+                          <td><span className={"badge "+(u.role==="admin"?"b-err":"b-free")}>{u.role||"user"}</span></td>
+                          <td><span className={"badge "+(u.abonnement_actif?"b-gold":"b-free")}>{statut}</span></td>
+                          <td style={{ color:G.textMuted, fontSize:12 }}>{dateInscr}</td>
+                          <td>
+                            <button className="btn btn-s btn-sm" onClick={function(){
+                              setUserDetail({
+                                id: u.id,
+                                nom: u.nom||"—",
+                                email: u.email,
+                                statut: statut,
+                                joinDate: u.date_inscription||new Date().toISOString(),
+                                expire: u.abonnement_expire||null,
+                                fiches: u.nb_fiches||0,
+                              });
+                            }}>Voir</button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {usersSupabase.length === 0 && (
+                      <tr><td colSpan={6} style={{ textAlign:"center", padding:"30px", color:G.textMuted }}>Aucun utilisateur inscrit</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         )}
 
@@ -2913,13 +2987,13 @@ function AdminApp({ user, onLogout, appCfg, setAppCfg }) {
               <table>
                 <thead><tr><th>Utilisateur</th><th>Expiration</th><th>Montant</th><th>Statut</th></tr></thead>
                 <tbody>
-                  {USERS_ADMIN.filter(function(u) { return u.statut !== "Gratuit"; }).map(function(u) {
+                  {usersSupabase.filter(function(u) { return u.abonnement_actif; }).map(function(u) {
                     return (
                       <tr key={u.id}>
-                        <td style={{ fontWeight:700 }}>{u.nom}</td>
-                        <td style={{ color:G.textMuted }}>{u.expire ? new Date(u.expire).toLocaleDateString("fr-FR") : "—"}</td>
-                        <td style={{ fontWeight:700 }}>2 000 FCFA</td>
-                        <td><span className={"badge "+(u.statut==="Abonné"?"b-ok":"b-err")}>{u.statut}</span></td>
+                        <td style={{ fontWeight:700 }}>{u.nom||"—"}</td>
+                        <td style={{ color:G.textMuted }}>{u.abonnement_expire ? new Date(u.abonnement_expire).toLocaleDateString("fr-FR") : "—"}</td>
+                        <td style={{ fontWeight:700 }}>3 000 FCFA</td>
+                        <td><span className="badge b-ok">Abonné</span></td>
                       </tr>
                     );
                   })}
@@ -2935,7 +3009,7 @@ function AdminApp({ user, onLogout, appCfg, setAppCfg }) {
             <p style={{ color:G.textMuted, fontSize:13, marginBottom:18 }}>Validez les abonnements des utilisateurs après vérification du paiement Mobile Money.</p>
 
             {/* Paiements en attente de validation */}
-            {paiementsEnAttente.length > 0 && (
+            {paiementsEnAttente && paiementsEnAttente.length > 0 && (
               <div style={{ marginBottom:22 }}>
                 <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:12 }}>
                   <h2 className="fd" style={{ fontSize:15, fontWeight:700 }}>⏳ En attente de validation</h2>
@@ -2943,6 +3017,10 @@ function AdminApp({ user, onLogout, appCfg, setAppCfg }) {
                 </div>
                 <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
                   {paiementsEnAttente.map(function(p) {
+                    var nomUser = (p.users && p.users.nom) ? p.users.nom : (p.nom_payeur || "Utilisateur");
+                    var emailUser = (p.users && p.users.email) ? p.users.email : "—";
+                    var methode = p.methode ? p.methode.toUpperCase() : "—";
+                    var montant = p.montant || 0;
                     return (
                       <div key={p.id} className="card" style={{ border:"1px solid rgba(245,158,11,.3)", background:"rgba(245,158,11,.05)" }}>
                         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", flexWrap:"wrap", gap:12 }}>
@@ -2951,27 +3029,31 @@ function AdminApp({ user, onLogout, appCfg, setAppCfg }) {
                               <span style={{ fontFamily:"monospace", color:G.accentLight, fontWeight:700 }}>#{p.id}</span>
                               <span className="badge b-warn">En attente</span>
                             </div>
-                            <div style={{ fontWeight:700, fontSize:15, marginBottom:4 }}>{p.users?.nom || p.nom_payeur || "Utilisateur"}</div>
-                            <div style={{ fontSize:12, color:G.textMuted, marginBottom:4 }}>{p.users?.email || "—"}</div>
+                            <div style={{ fontWeight:700, fontSize:15, marginBottom:4 }}>{nomUser}</div>
+                            <div style={{ fontSize:12, color:G.textMuted, marginBottom:4 }}>{emailUser}</div>
                             <div style={{ display:"flex", gap:12, flexWrap:"wrap" }}>
-                              <span style={{ fontSize:12, color:G.textSecondary }}>💰 <b style={{ color:G.textPrimary }}>{(p.montant||0).toLocaleString("fr-FR")} FCFA</b></span>
-                              <span style={{ fontSize:12, color:G.textSecondary }}>📱 <b style={{ color:G.textPrimary }}>{p.methode?.toUpperCase()}</b></span>
-                              <span style={{ fontSize:12, color:G.textSecondary }}>📞 {p.telephone}</span>
+                              <span style={{ fontSize:12, color:G.textSecondary }}>💰 <b style={{ color:G.textPrimary }}>{montant.toLocaleString("fr-FR")} FCFA</b></span>
+                              <span style={{ fontSize:12, color:G.textSecondary }}>📱 <b style={{ color:G.textPrimary }}>{methode}</b></span>
+                              <span style={{ fontSize:12, color:G.textSecondary }}>📞 {p.telephone||"—"}</span>
                             </div>
                             {p.reference_transaction && (
                               <div style={{ marginTop:8, padding:"6px 10px", background:"rgba(79,125,255,.1)", borderRadius:8, fontSize:12 }}>
-                                🔖 Référence transaction : <b style={{ color:G.accentLight, fontFamily:"monospace" }}>{p.reference_transaction}</b>
+                                🔖 Référence : <b style={{ color:G.accentLight, fontFamily:"monospace" }}>{p.reference_transaction}</b>
                               </div>
                             )}
-                            <div style={{ fontSize:11, color:G.textMuted, marginTop:6 }}>Soumis le {new Date(p.created_at).toLocaleDateString("fr-FR")} à {new Date(p.created_at).toLocaleTimeString("fr-FR",{hour:"2-digit",minute:"2-digit"})}</div>
+                            {p.created_at && (
+                              <div style={{ fontSize:11, color:G.textMuted, marginTop:6 }}>
+                                Soumis le {new Date(p.created_at).toLocaleDateString("fr-FR")} à {new Date(p.created_at).toLocaleTimeString("fr-FR",{hour:"2-digit",minute:"2-digit"})}
+                              </div>
+                            )}
                           </div>
                           <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
                             <button className="btn btn-ok" onClick={async function() {
-                              if (window.confirm("Valider l'abonnement de " + (p.users?.nom||p.nom_payeur) + " ?")) {
+                              if (window.confirm("Valider l'abonnement de " + nomUser + " ?")) {
                                 try {
                                   await supaValiderAbonnement(p.id, p.user_id);
                                   setPaiementsEnAttente(function(prev) { return prev.filter(function(x){ return x.id!==p.id; }); });
-                                  showT("✅ Abonnement validé pour "+(p.users?.nom||p.nom_payeur),"success");
+                                  showT("✅ Abonnement validé pour "+nomUser,"success");
                                 } catch(e) {
                                   showT("Erreur lors de la validation","error");
                                 }
@@ -2983,7 +3065,7 @@ function AdminApp({ user, onLogout, appCfg, setAppCfg }) {
                                   await supa.from("paiements").update({ statut:"echec" }).eq("id", p.id);
                                   setPaiementsEnAttente(function(prev) { return prev.filter(function(x){ return x.id!==p.id; }); });
                                   showT("Paiement rejeté","warning");
-                                } catch(e) {}
+                                } catch(e) { showT("Erreur","error"); }
                               }
                             }}>✕ Rejeter</button>
                           </div>
@@ -2995,13 +3077,27 @@ function AdminApp({ user, onLogout, appCfg, setAppCfg }) {
               </div>
             )}
 
-            {/* Historique paiements confirmés */}
-            <h2 className="fd" style={{ fontSize:15, fontWeight:700, marginBottom:12 }}>✅ Historique des paiements</h2>
+            {/* Message si aucun paiement en attente */}
+            {(!paiementsEnAttente || paiementsEnAttente.length === 0) && (
+              <div style={{ textAlign:"center", padding:"30px 20px", background:G.bgCard, borderRadius:14, border:"1px solid "+G.border, marginBottom:20 }}>
+                <div style={{ fontSize:36, marginBottom:10 }}>✅</div>
+                <p style={{ color:G.textMuted, fontSize:14, fontWeight:600 }}>Aucun paiement en attente de validation</p>
+                <p style={{ color:G.textMuted, fontSize:12, marginTop:6 }}>Les nouvelles demandes apparaîtront ici automatiquement</p>
+              </div>
+            )}
+
+            {/* Historique paiements */}
+            <h2 className="fd" style={{ fontSize:15, fontWeight:700, marginBottom:12 }}>📋 Historique des paiements</h2>
             <div className="card" style={{ overflowX:"auto" }}>
               <table>
                 <thead><tr><th>ID</th><th>Utilisateur</th><th>Montant</th><th>Méthode</th><th>Date</th><th>Statut</th></tr></thead>
                 <tbody>
-                  {PAIEMENTS_DEMO.map(function(p) {
+                  {[
+                    { id:"#4821", u:"Kouassi Amara",     m:"MTN MoMo",   d:"2024-02-14", ok:true  },
+                    { id:"#4820", u:"Koffi Jean-Pierre", m:"Moov Money", d:"2024-02-13", ok:true  },
+                    { id:"#4819", u:"Sossou Marie",      m:"Celtiis",    d:"2024-02-12", ok:false },
+                    { id:"#4818", u:"Bello Fatima",      m:"MTN MoMo",   d:"2024-02-11", ok:true  },
+                  ].map(function(p) {
                     return (
                       <tr key={p.id}>
                         <td style={{ fontFamily:"monospace", color:G.accent, fontWeight:700 }}>{p.id}</td>
