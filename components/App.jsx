@@ -182,17 +182,18 @@ const TICKETS_DEMO = [
 ];
 
 const NAV_ADMIN = [
-  { id:"stats",       icon:"📊", label:"Tableau de bord" },
-  { id:"fiches",      icon:"📚", label:"Gestion fiches"  },
-  { id:"documents",   icon:"📁", label:"Documents"       },
-  { id:"users",       icon:"👥", label:"Utilisateurs"    },
-  { id:"messages",    icon:"💬", label:"Messages"        },
-  { id:"abonnements", icon:"⭐", label:"Abonnements"     },
-  { id:"paiements",   icon:"💰", label:"Paiements"       },
-  { id:"demandes",    icon:"📋", label:"Demandes"        },
-  { id:"livraisons",  icon:"🚚", label:"Livraisons"      },
-  { id:"codes-promo", icon:"🎟️", label:"Codes Promo"     },
-  { id:"parametres",  icon:"⚙️", label:"Paramètres"      },
+  { id:"stats",       icon:"📊", label:"Tableau de bord"    },
+  { id:"fiches",      icon:"📚", label:"Gestion fiches"     },
+  { id:"documents",   icon:"📁", label:"Documents"          },
+  { id:"users",       icon:"👥", label:"Utilisateurs"       },
+  { id:"messages",    icon:"💬", label:"Messages"           },
+  { id:"abonnements", icon:"⭐", label:"Abonnements"        },
+  { id:"paiements",   icon:"💰", label:"Paiements"          },
+  { id:"commandes",   icon:"🖨️", label:"Commandes imprimées"},
+  { id:"demandes",    icon:"📋", label:"Demandes fiches"    },
+  { id:"livraisons",  icon:"🚚", label:"Livraisons"         },
+  { id:"codes-promo", icon:"🎟️", label:"Codes Promo"        },
+  { id:"parametres",  icon:"⚙️", label:"Paramètres"         },
 ];
 
 // ─── CODES PROMO ─────────────────────────────────────────────────────────────
@@ -567,7 +568,7 @@ function PaiementModal({ onClose, onSuccess, cfg, prix: prixProp, supportCfg, on
 }
 
 // ─── MODAL VERSION IMPRIMÉE ───────────────────────────────────────────────────
-function ImprimeeModal({ plan, onClose, cfg, supportCfg }) {
+function ImprimeeModal({ plan, onClose, cfg, supportCfg, user }) {
   const [step, setStep] = useState(1);
   const [methode, setMethode] = useState("");
   const [nom, setNom] = useState("");
@@ -575,6 +576,7 @@ function ImprimeeModal({ plan, onClose, cfg, supportCfg }) {
   const [adresse, setAdresse] = useState("");
   const [preuve, setPreuve] = useState("");
   const [copied, setCopied] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
   const support = supportCfg || SUPPORT_CONTACTS;
 
@@ -662,7 +664,19 @@ function ImprimeeModal({ plan, onClose, cfg, supportCfg }) {
                 <div style={{ fontSize:11, color:G.textMuted, marginTop:3 }}>Reçu par SMS après le paiement</div>
               </div>
             </div>
-            <button className="btn btn-p btn-lg" style={{ width:"100%" }} disabled={!nom||!phone||!adresse||!preuve} onClick={function() { setStep(4); }}>Valider ma commande ✓</button>
+            <button className="btn btn-p btn-lg" style={{ width:"100%" }} disabled={!nom||!phone||!adresse||!preuve||submitting} onClick={async function() {
+              setSubmitting(true);
+              try {
+                var userId = user ? user.id : null;
+                var userNom = user ? user.nom : nom;
+                var userEmail = user ? user.email : "";
+                await supaCreateCommandeImprimee(userId, userNom, userEmail, plan, phone, adresse, preuve, methode, plan.prix);
+              } catch(e) {
+                console.error("[FichesPro] Erreur commande imprimée:", e);
+              }
+              setSubmitting(false);
+              setStep(4);
+            }}>{submitting ? "⏳ Envoi..." : "Valider ma commande ✓"}</button>
           </div>
         )}
 
@@ -689,11 +703,12 @@ function ImprimeeModal({ plan, onClose, cfg, supportCfg }) {
 }
 
 // ─── MODAL DEMANDE ────────────────────────────────────────────────────────────
-function DemandeModal({ onClose, onSubmit }) {
+function DemandeModal({ onClose, onSubmit, user }) {
   const [titre, setTitre] = useState("");
   const [matiere, setMatiere] = useState("");
   const [niveau, setNiveau] = useState("");
   const [desc, setDesc] = useState("");
+  const [submitting, setSubmitting] = useState(false);
   const ok = titre && matiere && niveau;
 
   return (
@@ -729,7 +744,22 @@ function DemandeModal({ onClose, onSubmit }) {
           </div>
           <div style={{ display:"flex", gap:10 }}>
             <button className="btn btn-s" style={{ flex:1 }} onClick={onClose}>Annuler</button>
-            <button className="btn btn-p" style={{ flex:2 }} disabled={!ok} onClick={function() { onSubmit({ titre, matiere, niveau, desc }); }}>Envoyer 📤</button>
+            <button className="btn btn-p" style={{ flex:2 }} disabled={!ok||submitting} onClick={async function() {
+              setSubmitting(true);
+              try {
+                var matiereLabel = MATIERES.find(function(m){return m.id===matiere;});
+                await supaCreateDemandeFiche(
+                  user ? user.id : null,
+                  user ? user.nom : "Anonyme",
+                  user ? user.email : "",
+                  titre,
+                  matiereLabel ? matiereLabel.label : matiere,
+                  niveau, desc
+                );
+              } catch(e) { console.error("[FichesPro] Erreur demande fiche:", e); }
+              setSubmitting(false);
+              onSubmit({ titre, matiere, niveau, desc });
+            }}>{submitting ? "⏳ Envoi..." : "Envoyer 📤"}</button>
           </div>
         </div>
       </div>
@@ -897,7 +927,123 @@ async function supaAddMessage(ticketId, auteur, nom, texte) {
   }).eq("id", ticketId);
 }
 
-// CORRECTION P4 : Charger et sauvegarder les paramètres depuis Supabase
+// ─── C1 : ABONNEMENTS ────────────────────────────────────────────────────────
+async function supaDemanderAbonnement(userId, userNom, userEmail, preuve, telephone, montant, methode) {
+  // Insérer dans paiements
+  var { data: paiement } = await supa.from("paiements").insert({
+    user_id: userId, montant, methode,
+    reference_transaction: preuve,
+    nom_payeur: userNom, telephone,
+    statut: "en_attente",
+    created_at: new Date().toISOString(),
+  }).select().single();
+  // Insérer dans abonnements avec statut en_attente
+  await supa.from("abonnements").insert({
+    user_id: userId, type: "annuel", prix: montant,
+    statut: "en_attente", created_at: new Date().toISOString(),
+  });
+  // Log système
+  console.log("[FichesPro] Demande abonnement soumise:", userId, montant, methode);
+  return paiement;
+}
+
+async function supaGetAbonnements() {
+  var { data } = await supa.from("abonnements")
+    .select("*, users(nom, email)")
+    .order("created_at", { ascending:false });
+  return data || [];
+}
+
+async function supaValiderAbonnement(paiementId, userId) {
+  var dateFin = new Date();
+  dateFin.setFullYear(dateFin.getFullYear() + 1);
+  // Activer dans users
+  await supa.from("users").update({
+    abonnement_actif: true,
+    abonnement_expire: dateFin.toISOString(),
+  }).eq("id", userId);
+  // Confirmer paiement
+  if (paiementId) await supa.from("paiements").update({ statut: "confirme" }).eq("id", paiementId);
+  // Activer abonnement
+  await supa.from("abonnements").update({ statut: "actif", date_debut: new Date().toISOString(), date_fin: dateFin.toISOString() }).eq("user_id", userId).eq("statut", "en_attente");
+  console.log("[FichesPro] Abonnement validé pour userId:", userId);
+}
+
+// C4 : Vérifier abonnement actif côté Supabase
+async function supaVerifierAbonnement(userId) {
+  if (!userId) return false;
+  var { data } = await supa.from("users").select("abonnement_actif, abonnement_expire").eq("id", userId).single();
+  if (!data || !data.abonnement_actif) return false;
+  if (data.abonnement_expire && new Date(data.abonnement_expire) < new Date()) return false;
+  return true;
+}
+
+// ─── C3 : COMMANDES IMPRIMÉES ─────────────────────────────────────────────────
+async function supaCreateCommandeImprimee(userId, userNom, userEmail, plan, telephone, adresse, preuve, methode, montant) {
+  var { data } = await supa.from("printed_sheet_orders").insert({
+    user_id: userId, user_nom: userNom, user_email: userEmail,
+    plan_label: plan.label, plan_classes: plan.classes ? plan.classes.join(", ") : "",
+    montant, methode, telephone, adresse,
+    preuve_transaction: preuve,
+    statut: "En attente", created_at: new Date().toISOString(),
+  }).select().single();
+  console.log("[FichesPro] Commande imprimée créée:", data?.id);
+  return data;
+}
+
+async function supaGetCommandesImprimees() {
+  var { data } = await supa.from("printed_sheet_orders").select("*").order("created_at", { ascending:false });
+  return data || [];
+}
+
+async function supaUpdateStatutCommande(commandeId, statut) {
+  await supa.from("printed_sheet_orders").update({ statut, updated_at: new Date().toISOString() }).eq("id", commandeId);
+}
+
+// ─── C6 : DEMANDES DE FICHES ──────────────────────────────────────────────────
+async function supaCreateDemandeFiche(userId, userNom, userEmail, titre, matiere, niveau, description) {
+  var { data } = await supa.from("requested_sheets").insert({
+    user_id: userId, user_nom: userNom, user_email: userEmail,
+    titre, matiere, niveau, description,
+    statut: "En attente", created_at: new Date().toISOString(),
+  }).select().single();
+  console.log("[FichesPro] Demande fiche créée:", data?.id);
+  return data;
+}
+
+async function supaGetDemandesFiches() {
+  var { data } = await supa.from("requested_sheets").select("*").order("created_at", { ascending:false });
+  return data || [];
+}
+
+async function supaUpdateStatutDemande(demandeId, statut) {
+  await supa.from("requested_sheets").update({ statut, updated_at: new Date().toISOString() }).eq("id", demandeId);
+}
+
+// ─── C5 : RESET MOT DE PASSE AVEC URL PRODUCTION ─────────────────────────────
+async function supaResetPassword(email) {
+  // Toujours utiliser l'URL de production pour le lien de reset
+  var prodUrl = process.env.NEXT_PUBLIC_SITE_URL || "https://fichespro.vercel.app";
+  var redirectTo = prodUrl + "/reset-password";
+  var { error } = await supa.auth.resetPasswordForEmail(email, { redirectTo });
+  if (error) throw new Error(error.message);
+  console.log("[FichesPro] Email reset envoyé à:", email, "redirect:", redirectTo);
+}
+
+// ─── C7 : CHANGEMENT MOT DE PASSE ADMIN ──────────────────────────────────────
+async function supaChangerMotDePasse(ancienPwd, nouveauPwd) {
+  // Vérifier l'ancien mot de passe pour admin
+  var { error: loginErr } = await supa.auth.signInWithPassword({
+    email: "admin@fichespro.com", password: ancienPwd
+  });
+  if (loginErr) throw new Error("Mot de passe actuel incorrect.");
+  // Mettre à jour
+  var { error } = await supa.auth.updateUser({ password: nouveauPwd });
+  if (error) throw new Error(error.message);
+  console.log("[FichesPro] Mot de passe admin mis à jour");
+}
+
+// ─── C4 : Charger et sauvegarder les paramètres depuis Supabase
 async function supaGetParametres() {
   var { data } = await supa.from("parametres").select("*").eq("id", 1).single();
   if (!data) return null;
@@ -1399,23 +1545,50 @@ function UserApp({ user, onLogout, appCfg, setUser }) {
 
   var badgesDebloques = verifierBadges(historique.length, abonne, Object.keys(notesUtilisateur).length);
 
-  function telecharger(f) {
-    if (!abonne && nbGratuit >= (aboCfg.ficheGratuites || 5)) { setShowAbo(true); return; }
-    if (!abonne) setNbGratuit(function(n) { return n + 1; });
+  // C4: Vérifier abonnement au chargement depuis Supabase
+  useEffect(function() {
+    if (!user.id) return;
+    supaVerifierAbonnement(user.id).then(function(actif) {
+      if (actif && !abonne) {
+        setAbonne(true);
+        console.log("[FichesPro] Abonnement actif détecté depuis Supabase");
+      }
+    }).catch(function() {});
+  }, [user.id]);
+
+  async function telecharger(f) {
+    // C4: Vérifier abonnement côté Supabase pour les fiches premium
+    if (f.premium) {
+      var abonneActif = abonne;
+      if (!abonneActif && user.id) {
+        abonneActif = await supaVerifierAbonnement(user.id).catch(function(){ return false; });
+        if (abonneActif) setAbonne(true);
+      }
+      if (!abonneActif) {
+        showT("❌ Aucun abonnement actif. Veuillez finaliser votre abonnement.", "error");
+        setShowAbo(true);
+        return;
+      }
+    } else {
+      // Fiche gratuite : vérifier le quota
+      if (!abonne && nbGratuit >= (aboCfg.ficheGratuites || 5)) {
+        setShowAbo(true);
+        return;
+      }
+      if (!abonne) setNbGratuit(function(n) { return n + 1; });
+    }
     var nvHist = [Object.assign({}, f, { date: new Date().toISOString() })].concat(historique);
     setHistorique(nvHist);
     setFichesOffline(function(prev) {
       if (prev.find(function(x) { return x.id === f.id; })) return prev;
       return prev.concat([f]);
     });
-    // Logger dans Supabase
     if (user.id) supaLogTelecharger(user.id, f.id).catch(function(){});
-    // Ouvrir le vrai PDF si disponible
     if (f.fichierUrl) {
       window.open(f.fichierUrl, "_blank");
       showT(f.titre + " — PDF ouvert 📄", "success");
     } else {
-      showT(f.titre + " téléchargé ✅ (PDF de démonstration)", "success");
+      showT(f.titre + " téléchargé ✅", "success");
     }
     if (nvHist.length === 1) showT("🎯 Badge débloqué : Premier téléchargement !", "info");
     if (nvHist.length === 5) showT("📚 Badge débloqué : Lecteur !", "info");
@@ -1488,8 +1661,8 @@ function UserApp({ user, onLogout, appCfg, setUser }) {
           } catch(e) {}
         }
       }} />}
-      {showDemande && <DemandeModal onClose={function() { setShowDemande(false); }} onSubmit={function() { setShowDemande(false); showT("Demande envoyée ! Réponse sous 48h", "success"); }} />}
-      {showImprimee && <ImprimeeModal plan={showImprimee} onClose={function() { setShowImprimee(null); }} cfg={paieCfg} supportCfg={supportCfg} />}
+      {showDemande && <DemandeModal user={user} onClose={function() { setShowDemande(false); }} onSubmit={function() { setShowDemande(false); showT("Demande envoyée ! Réponse sous 48h 📬", "success"); }} />}
+      {showImprimee && <ImprimeeModal user={user} plan={showImprimee} onClose={function() { setShowImprimee(null); }} cfg={paieCfg} supportCfg={supportCfg} />}
 
       {/* MODAL QUIZ */}
       {showQuiz && (function(){
@@ -2408,6 +2581,10 @@ function AdminApp({ user, onLogout, appCfg, setAppCfg }) {
   const [usersSupabase, setUsersSupabase] = useState([]);
   const [usersLoading, setUsersLoading] = useState(true);
   const [searchUser, setSearchUser] = useState("");
+  const [commandesImprimees, setCommandesImprimees] = useState([]);
+  const [demandesFiches, setDemandesFiches] = useState([]);
+  const [abonnementsSupabase, setAbonnementsSupabase] = useState([]);
+  const [changePwd, setChangePwd] = useState({ ancien:"", nouveau:"", confirm:"", err:"", ok:false, loading:false });
 
   // Charger les utilisateurs depuis Supabase
   useEffect(function() {
@@ -2437,7 +2614,15 @@ function AdminApp({ user, onLogout, appCfg, setAppCfg }) {
     chargerUsers();
   }, []);
 
-  // Édition locale des paramètres (synchronisée depuis appCfg)
+  // Charger commandes, demandes et abonnements depuis Supabase
+  useEffect(function() {
+    supaGetCommandesImprimees().then(setCommandesImprimees).catch(function() {});
+    supaGetDemandesFiches().then(setDemandesFiches).catch(function() {});
+    supaGetAbonnements().then(setAbonnementsSupabase).catch(function() {});
+    supaGetPaiementsEnAttente().then(function(data) {
+      if (data && data.length > 0) setPaiementsEnAttente(data);
+    }).catch(function() {});
+  }, []); (synchronisée depuis appCfg)
   const [paieEdit, setPaieEdit] = useState({
     mtn:     { numero: appCfg.paiement.mtn.numero,     nom: appCfg.paiement.mtn.nom     },
     moov:    { numero: appCfg.paiement.moov.numero,    nom: appCfg.paiement.moov.nom    },
@@ -3102,25 +3287,41 @@ function AdminApp({ user, onLogout, appCfg, setAppCfg }) {
 
         {tab==="abonnements" && (
           <div>
-            <h1 className="fd" style={{ fontSize:20, fontWeight:800, marginBottom:20 }}>Abonnements</h1>
-            <div className="g3" style={{ marginBottom:20 }}>
-              {[{ l:"Abonnements actifs",v:"87",c:G.success,i:"✅" },{ l:"Expirés ce mois",v:"14",c:G.warning,i:"⚠️" },{ l:"Revenus mensuels",v:"174 000 FCFA",c:G.accent,i:"💰" }].map(function(s) {
-                return (
-                  <div key={s.l} className="scard"><div style={{ fontSize:24, marginBottom:7 }}>{s.i}</div><div className="fd" style={{ fontSize:18, fontWeight:800, color:s.c }}>{s.v}</div><div style={{ fontSize:11, color:G.textMuted, marginTop:3, fontWeight:600 }}>{s.l}</div></div>
-                );
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:18 }}>
+              <h1 className="fd" style={{ fontSize:20, fontWeight:800 }}>⭐ Gestion des abonnements</h1>
+              <button className="btn btn-s btn-sm" onClick={function(){ supaGetAbonnements().then(setAbonnementsSupabase).catch(function(){}); showT("Actualisé","success"); }}>🔄 Actualiser</button>
+            </div>
+            {/* Stats */}
+            <div className="g4" style={{ marginBottom:20 }}>
+              {[
+                { i:"✅", l:"Actifs",     v:abonnementsSupabase.filter(function(a){return a.statut==="actif";}).length,      c:G.success },
+                { i:"⏳", l:"En attente", v:abonnementsSupabase.filter(function(a){return a.statut==="en_attente";}).length,  c:G.warning },
+                { i:"❌", l:"Expirés",    v:abonnementsSupabase.filter(function(a){return a.statut==="expire";}).length,      c:G.danger  },
+                { i:"💰", l:"Total",      v:abonnementsSupabase.length,                                                       c:G.accent  },
+              ].map(function(s){
+                return <div key={s.l} className="scard"><div style={{ fontSize:22, marginBottom:6 }}>{s.i}</div><div className="fd" style={{ fontSize:22, fontWeight:800, color:s.c }}>{s.v}</div><div style={{ fontSize:11, color:G.textMuted, fontWeight:600 }}>{s.l}</div></div>;
               })}
             </div>
             <div className="card" style={{ overflowX:"auto" }}>
               <table>
-                <thead><tr><th>Utilisateur</th><th>Expiration</th><th>Montant</th><th>Statut</th></tr></thead>
+                <thead><tr><th>Utilisateur</th><th>Email</th><th>Type</th><th>Début</th><th>Expiration</th><th>Montant</th><th>Statut</th></tr></thead>
                 <tbody>
-                  {usersSupabase.filter(function(u) { return u.abonnement_actif; }).map(function(u) {
+                  {abonnementsSupabase.length === 0 ? (
+                    <tr><td colSpan={7} style={{ textAlign:"center", padding:"30px", color:G.textMuted }}>Aucun abonnement</td></tr>
+                  ) : abonnementsSupabase.map(function(a) {
+                    var nom = (a.users && a.users.nom) ? a.users.nom : "—";
+                    var email = (a.users && a.users.email) ? a.users.email : "—";
+                    var statutCls = a.statut==="actif"?"b-ok":a.statut==="en_attente"?"b-warn":"b-err";
+                    var statutLabel = a.statut==="actif"?"✅ Actif":a.statut==="en_attente"?"⏳ En attente":a.statut==="expire"?"❌ Expiré":"—";
                     return (
-                      <tr key={u.id}>
-                        <td style={{ fontWeight:700 }}>{u.nom||"—"}</td>
-                        <td style={{ color:G.textMuted }}>{u.abonnement_expire ? new Date(u.abonnement_expire).toLocaleDateString("fr-FR") : "—"}</td>
-                        <td style={{ fontWeight:700 }}>3 000 FCFA</td>
-                        <td><span className="badge b-ok">Abonné</span></td>
+                      <tr key={a.id}>
+                        <td style={{ fontWeight:700 }}>{nom}</td>
+                        <td style={{ color:G.textMuted, fontSize:12 }}>{email}</td>
+                        <td><span style={{ fontSize:12, fontWeight:700 }}>{a.type||"annuel"}</span></td>
+                        <td style={{ color:G.textMuted, fontSize:12 }}>{a.date_debut ? new Date(a.date_debut).toLocaleDateString("fr-FR") : "—"}</td>
+                        <td style={{ color:G.textMuted, fontSize:12 }}>{a.date_fin ? new Date(a.date_fin).toLocaleDateString("fr-FR") : "—"}</td>
+                        <td style={{ fontWeight:700 }}>{a.prix ? a.prix.toLocaleString("fr-FR")+" FCFA" : "—"}</td>
+                        <td><span className={"badge "+statutCls}>{statutLabel}</span></td>
                       </tr>
                     );
                   })}
@@ -3242,30 +3443,110 @@ function AdminApp({ user, onLogout, appCfg, setAppCfg }) {
           </div>
         )}
 
+        {tab==="commandes" && (
+          <div>
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:18 }}>
+              <h1 className="fd" style={{ fontSize:20, fontWeight:800 }}>🖨️ Commandes imprimées
+                {commandesImprimees.filter(function(c){return c.statut==="En attente";}).length > 0 && (
+                  <span style={{ background:G.danger, color:"#fff", fontSize:11, padding:"2px 8px", borderRadius:10, marginLeft:10 }}>
+                    {commandesImprimees.filter(function(c){return c.statut==="En attente";}).length}
+                  </span>
+                )}
+              </h1>
+              <button className="btn btn-s btn-sm" onClick={function(){ supaGetCommandesImprimees().then(setCommandesImprimees).catch(function(){}); showT("Actualisé","success"); }}>🔄 Actualiser</button>
+            </div>
+            {commandesImprimees.length === 0 ? (
+              <div style={{ textAlign:"center", padding:"40px", color:G.textMuted, background:G.bgCard, borderRadius:14, border:"1px solid "+G.border }}>
+                <div style={{ fontSize:36, marginBottom:10 }}>🖨️</div><p>Aucune commande pour le moment</p>
+              </div>
+            ) : (
+              <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
+                {commandesImprimees.map(function(c) {
+                  return (
+                    <div key={c.id} className="card" style={{ border:"1px solid "+(c.statut==="En attente"?"rgba(245,158,11,.3)":"rgba(99,130,255,.15)") }}>
+                      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", flexWrap:"wrap", gap:12 }}>
+                        <div style={{ flex:1 }}>
+                          <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:6 }}>
+                            <span style={{ fontFamily:"monospace", color:G.accentLight, fontWeight:700, fontSize:12 }}>#{c.id}</span>
+                            <span className={"badge "+(c.statut==="Livrée"?"b-ok":c.statut==="En attente"?"b-warn":"b-free")}>{c.statut}</span>
+                          </div>
+                          <div style={{ fontWeight:700, fontSize:15 }}>{c.user_nom||"—"}</div>
+                          <div style={{ fontSize:12, color:G.textMuted, marginBottom:4 }}>{c.user_email} · 📞 {c.telephone}</div>
+                          <div style={{ fontSize:13 }}>📦 <b>{c.plan_label}</b> · 💰 {(c.montant||0).toLocaleString("fr-FR")} FCFA</div>
+                          <div style={{ fontSize:12, color:G.textMuted, marginTop:3 }}>📍 {c.adresse} · {c.methode}</div>
+                          {c.preuve_transaction && <div style={{ fontSize:11, color:G.accentLight, marginTop:4 }}>🔖 Réf: {c.preuve_transaction}</div>}
+                        </div>
+                        <div style={{ display:"flex", flexDirection:"column", gap:7 }}>
+                          <select value={c.statut} onChange={async function(e) {
+                            var nvStatut = e.target.value;
+                            await supaUpdateStatutCommande(c.id, nvStatut).catch(function(){});
+                            setCommandesImprimees(function(prev){ return prev.map(function(x){ return x.id===c.id?Object.assign({},x,{statut:nvStatut}):x; }); });
+                            showT("Statut → "+nvStatut,"success");
+                          }} style={{ background:G.bgInput, border:"1px solid "+G.border, borderRadius:8, padding:"5px 8px", color:G.textPrimary, fontSize:12, cursor:"pointer" }}>
+                            {["En attente","Confirmée","En préparation","Expédiée","Livrée","Annulée"].map(function(s){ return <option key={s} value={s}>{s}</option>; })}
+                          </select>
+                          <a href={"https://wa.me/"+c.telephone+"?text="+encodeURIComponent("Bonjour "+c.user_nom+" ! Votre commande FichesPro ("+c.plan_label+") est confirmée. Merci !")} target="_blank" rel="noreferrer">
+                            <button className="btn btn-sm" style={{ background:"rgba(37,211,102,.12)", border:"1px solid rgba(37,211,102,.3)", color:"#25d366", width:"100%" }}>💬 WA</button>
+                          </a>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
         {tab==="demandes" && (
           <div>
-            <h1 className="fd" style={{ fontSize:20, fontWeight:800, marginBottom:20 }}>Demandes de fiches</h1>
-            <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
-              {[
-                { t:"Les plantes vivantes",   m:"EST",               n:"CE2", u:"Bello Fatima",    s:"En attente" },
-                { t:"La phrase complexe",     m:"Français Grammaire",n:"CM1", u:"Sossou Marie",    s:"En attente" },
-                { t:"Les fractions decimales",m:"Maths Arithmetique",n:"CM2", u:"Koffi Jean-Pierre",s:"En cours"  },
-                { t:"Le temps libre",         m:"Com. Orale",         n:"CE1", u:"Kouassi Amara",   s:"Terminée"  },
-              ].map(function(d, i) {
-                return (
-                  <div key={i} className="card" style={{ display:"flex", alignItems:"center", gap:16, flexWrap:"wrap" }}>
-                    <div style={{ flex:1 }}>
-                      <div style={{ fontWeight:700, fontSize:14, marginBottom:3 }}>{d.t}</div>
-                      <div style={{ fontSize:11, color:G.textMuted }}>{d.m} · {d.n} · <b style={{ color:G.textSecondary }}>{d.u}</b></div>
-                    </div>
-                    <div style={{ display:"flex", gap:7, alignItems:"center" }}>
-                      <span className={"badge "+(d.s==="Terminée"?"b-ok":d.s==="En cours"?"b-warn":"b-err")}>{d.s}</span>
-                      {d.s==="En attente" && <button className="btn btn-ok btn-sm" onClick={function() { showT("Demande validée !","success"); }}>✓ Valider</button>}
-                    </div>
-                  </div>
-                );
-              })}
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:18 }}>
+              <h1 className="fd" style={{ fontSize:20, fontWeight:800 }}>📋 Demandes de fiches
+                {demandesFiches.filter(function(d){return d.statut==="En attente";}).length > 0 && (
+                  <span style={{ background:G.danger, color:"#fff", fontSize:11, padding:"2px 8px", borderRadius:10, marginLeft:10 }}>
+                    {demandesFiches.filter(function(d){return d.statut==="En attente";}).length}
+                  </span>
+                )}
+              </h1>
+              <button className="btn btn-s btn-sm" onClick={function(){ supaGetDemandesFiches().then(setDemandesFiches).catch(function(){}); showT("Actualisé","success"); }}>🔄 Actualiser</button>
             </div>
+            {demandesFiches.length === 0 ? (
+              <div style={{ textAlign:"center", padding:"40px", color:G.textMuted, background:G.bgCard, borderRadius:14, border:"1px solid "+G.border }}>
+                <div style={{ fontSize:36, marginBottom:10 }}>📋</div><p>Aucune demande pour le moment</p>
+              </div>
+            ) : (
+              <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+                {demandesFiches.map(function(d) {
+                  return (
+                    <div key={d.id} className="card" style={{ border:"1px solid "+(d.statut==="En attente"?"rgba(239,68,68,.25)":"rgba(99,130,255,.15)") }}>
+                      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", flexWrap:"wrap", gap:10 }}>
+                        <div style={{ flex:1 }}>
+                          <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:5 }}>
+                            <span style={{ fontWeight:700, fontSize:14 }}>{d.titre}</span>
+                            <span className={"badge "+(d.statut==="Terminée"?"b-ok":d.statut==="En cours"?"b-warn":"b-err")}>{d.statut}</span>
+                          </div>
+                          <div style={{ fontSize:12, color:G.textMuted }}>📚 {d.matiere} · 🎓 {d.niveau} · 👤 {d.user_nom||"—"}</div>
+                          {d.description && <div style={{ fontSize:12, color:G.textSecondary, marginTop:4 }}>{d.description}</div>}
+                          <div style={{ fontSize:11, color:G.textMuted, marginTop:4 }}>{d.created_at ? new Date(d.created_at).toLocaleString("fr-FR") : ""}</div>
+                        </div>
+                        <div style={{ display:"flex", gap:7 }}>
+                          {d.statut!=="Terminée" && <button className="btn btn-s btn-sm" onClick={async function(){
+                            await supaUpdateStatutDemande(d.id,"En cours").catch(function(){});
+                            setDemandesFiches(function(prev){ return prev.map(function(x){ return x.id===d.id?Object.assign({},x,{statut:"En cours"}):x; }); });
+                            showT("Prise en charge","info");
+                          }}>▶ En cours</button>}
+                          {d.statut!=="Terminée" && <button className="btn btn-ok btn-sm" onClick={async function(){
+                            await supaUpdateStatutDemande(d.id,"Terminée").catch(function(){});
+                            setDemandesFiches(function(prev){ return prev.map(function(x){ return x.id===d.id?Object.assign({},x,{statut:"Terminée"}):x; }); });
+                            showT("Demande terminée ✅","success");
+                          }}>✓ Terminer</button>}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
 
@@ -3584,6 +3865,57 @@ function AdminApp({ user, onLogout, appCfg, setAppCfg }) {
               <button className="btn btn-p" style={{ flex:3 }} onClick={saveCfg}>
                 {saved ? "✅ Paramètres enregistrés et appliqués !" : "💾 Enregistrer tous les paramètres"}
               </button>
+            </div>
+
+            {/* C7 — CHANGEMENT MOT DE PASSE ADMIN */}
+            <div style={{ marginTop:24 }}>
+              <div style={{ fontSize:14, fontWeight:800, color:G.accentLight, marginBottom:14 }}>🔐 Sécurité — Changer le mot de passe admin</div>
+              <div className="card" style={{ border:"1px solid rgba(239,68,68,.2)", background:"rgba(239,68,68,.04)" }}>
+                {changePwd.ok ? (
+                  <div style={{ textAlign:"center", padding:"20px 0" }}>
+                    <div style={{ fontSize:42, marginBottom:10 }}>✅</div>
+                    <p style={{ fontWeight:700, color:G.success, marginBottom:8 }}>Mot de passe modifié avec succès !</p>
+                    <p style={{ fontSize:12, color:G.textMuted, marginBottom:14 }}>Vous allez être déconnecté pour sécuriser votre session.</p>
+                    <button className="btn btn-p" onClick={function(){ onLogout(); }}>Se reconnecter</button>
+                  </div>
+                ) : (
+                  <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
+                    <div>
+                      <label style={{ fontSize:11, fontWeight:700, color:G.textMuted, textTransform:"uppercase", display:"block", marginBottom:5 }}>Mot de passe actuel *</label>
+                      <input className="inp" type="password" placeholder="••••••••" value={changePwd.ancien}
+                        onChange={function(e){ setChangePwd(function(p){ return Object.assign({},p,{ancien:e.target.value,err:""}); })} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize:11, fontWeight:700, color:G.textMuted, textTransform:"uppercase", display:"block", marginBottom:5 }}>Nouveau mot de passe *</label>
+                      <input className="inp" type="password" placeholder="Minimum 8 caractères" value={changePwd.nouveau}
+                        onChange={function(e){ setChangePwd(function(p){ return Object.assign({},p,{nouveau:e.target.value,err:""}); })} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize:11, fontWeight:700, color:G.textMuted, textTransform:"uppercase", display:"block", marginBottom:5 }}>Confirmer le nouveau mot de passe *</label>
+                      <input className="inp" type="password" placeholder="Répéter le nouveau mot de passe" value={changePwd.confirm}
+                        onChange={function(e){ setChangePwd(function(p){ return Object.assign({},p,{confirm:e.target.value,err:""}); })} />
+                    </div>
+                    {changePwd.err && <div style={{ fontSize:12, color:G.danger, background:"rgba(239,68,68,.08)", padding:"8px 12px", borderRadius:8 }}>❌ {changePwd.err}</div>}
+                    <div style={{ fontSize:12, color:G.textMuted, background:"rgba(79,125,255,.07)", padding:"8px 12px", borderRadius:8 }}>
+                      ⚠️ Après modification, vous serez déconnecté de toutes les sessions actives.
+                    </div>
+                    <button className="btn btn-d" disabled={changePwd.loading||!changePwd.ancien||!changePwd.nouveau||!changePwd.confirm}
+                      onClick={async function(){
+                        if (changePwd.nouveau.length < 8) { setChangePwd(function(p){ return Object.assign({},p,{err:"Le mot de passe doit contenir au moins 8 caractères."}); }); return; }
+                        if (changePwd.nouveau !== changePwd.confirm) { setChangePwd(function(p){ return Object.assign({},p,{err:"Les mots de passe ne correspondent pas."}); }); return; }
+                        setChangePwd(function(p){ return Object.assign({},p,{loading:true,err:""}); });
+                        try {
+                          await supaChangerMotDePasse(changePwd.ancien, changePwd.nouveau);
+                          setChangePwd(function(p){ return Object.assign({},p,{loading:false,ok:true}); });
+                        } catch(e) {
+                          setChangePwd(function(p){ return Object.assign({},p,{loading:false,err:e.message||"Erreur lors du changement de mot de passe."}); });
+                        }
+                      }}>
+                      {changePwd.loading ? "⏳ Modification en cours..." : "🔐 Modifier le mot de passe"}
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         )}
