@@ -1023,7 +1023,7 @@ async function supaUpdateStatutDemande(demandeId, statut) {
 // ─── C5 : RESET MOT DE PASSE AVEC URL PRODUCTION ─────────────────────────────
 async function supaResetPassword(email) {
   // Toujours utiliser l'URL de production pour le lien de reset
-  var prodUrl = process.env.NEXT_PUBLIC_SITE_URL || "https://fichespro.vercel.app";
+  var prodUrl = process.env.NEXT_PUBLIC_SITE_URL || "https://fichespro-five.vercel.app";
   var redirectTo = prodUrl + "/reset-password";
   var { error } = await supa.auth.resetPasswordForEmail(email, { redirectTo });
   if (error) throw new Error(error.message);
