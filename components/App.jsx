@@ -2622,7 +2622,7 @@ function AdminApp({ user, onLogout, appCfg, setAppCfg }) {
     supaGetPaiementsEnAttente().then(function(data) {
       if (data && data.length > 0) setPaiementsEnAttente(data);
     }).catch(function() {});
-  }, []); (synchronisée depuis appCfg)
+  }, []);
   const [paieEdit, setPaieEdit] = useState({
     mtn:     { numero: appCfg.paiement.mtn.numero,     nom: appCfg.paiement.mtn.nom     },
     moov:    { numero: appCfg.paiement.moov.numero,    nom: appCfg.paiement.moov.nom    },
