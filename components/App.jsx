@@ -3883,17 +3883,26 @@ function AdminApp({ user, onLogout, appCfg, setAppCfg }) {
                     <div>
                       <label style={{ fontSize:11, fontWeight:700, color:G.textMuted, textTransform:"uppercase", display:"block", marginBottom:5 }}>Mot de passe actuel *</label>
                       <input className="inp" type="password" placeholder="••••••••" value={changePwd.ancien}
-                        onChange={function(e){ setChangePwd(function(p){ return Object.assign({},p,{ancien:e.target.value,err:""}); })} />
+                        onChange={function(e){
+                          var val = e.target.value;
+                          setChangePwd(function(p){ return { ancien:val, nouveau:p.nouveau, confirm:p.confirm, err:"", ok:p.ok, loading:p.loading }; });
+                        }} />
                     </div>
                     <div>
                       <label style={{ fontSize:11, fontWeight:700, color:G.textMuted, textTransform:"uppercase", display:"block", marginBottom:5 }}>Nouveau mot de passe *</label>
                       <input className="inp" type="password" placeholder="Minimum 8 caractères" value={changePwd.nouveau}
-                        onChange={function(e){ setChangePwd(function(p){ return Object.assign({},p,{nouveau:e.target.value,err:""}); })} />
+                        onChange={function(e){
+                          var val = e.target.value;
+                          setChangePwd(function(p){ return { ancien:p.ancien, nouveau:val, confirm:p.confirm, err:"", ok:p.ok, loading:p.loading }; });
+                        }} />
                     </div>
                     <div>
                       <label style={{ fontSize:11, fontWeight:700, color:G.textMuted, textTransform:"uppercase", display:"block", marginBottom:5 }}>Confirmer le nouveau mot de passe *</label>
                       <input className="inp" type="password" placeholder="Répéter le nouveau mot de passe" value={changePwd.confirm}
-                        onChange={function(e){ setChangePwd(function(p){ return Object.assign({},p,{confirm:e.target.value,err:""}); })} />
+                        onChange={function(e){
+                          var val = e.target.value;
+                          setChangePwd(function(p){ return { ancien:p.ancien, nouveau:p.nouveau, confirm:val, err:"", ok:p.ok, loading:p.loading }; });
+                        }} />
                     </div>
                     {changePwd.err && <div style={{ fontSize:12, color:G.danger, background:"rgba(239,68,68,.08)", padding:"8px 12px", borderRadius:8 }}>❌ {changePwd.err}</div>}
                     <div style={{ fontSize:12, color:G.textMuted, background:"rgba(79,125,255,.07)", padding:"8px 12px", borderRadius:8 }}>
