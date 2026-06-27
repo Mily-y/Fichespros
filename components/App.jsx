@@ -920,6 +920,25 @@ async function supaAddMessage(ticketId, auteur, nom, texte) {
   }).eq("id", ticketId);
 }
 
+// ─── C1 : ABONNEMENTS ────────────────────────────────────────────────────────
+async function supaGetAbonnements() {
+  var { data } = await supa.from("abonnements")
+    .select("*, users(nom, email)")
+    .order("created_at", { ascending:false });
+  return data || [];
+}
+
+// C4 : Vérifier abonnement actif côté Supabase
+async function supaVerifierAbonnement(userId) {
+  if (!userId) return false;
+  var { data } = await supa.from("users")
+    .select("abonnement_actif, abonnement_expire")
+    .eq("id", userId).single();
+  if (!data || !data.abonnement_actif) return false;
+  if (data.abonnement_expire && new Date(data.abonnement_expire) < new Date()) return false;
+  return true;
+}
+
 // ─── C3 : COMMANDES IMPRIMÉES ─────────────────────────────────────────────────
 async function supaCreateCommandeImprimee(userId, userNom, userEmail, plan, telephone, adresse, preuve, methode, montant) {
   var { data } = await supa.from("printed_sheet_orders").insert({
