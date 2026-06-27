@@ -840,13 +840,6 @@ async function supaLogin(email, pwd) {
   return { role: profil?.role||"user", nom, email, id: data.user.id };
 }
 
-async function supaResetPassword(email) {
-  var { error } = await supa.auth.resetPasswordForEmail(email, {
-    redirectTo: (typeof window !== "undefined" ? window.location.origin : "") + "/reset-password",
-  });
-  if (error) throw new Error(error.message);
-}
-
 async function supaUpdateProfile(userId, nom, email) {
   if (!userId) return;
   try {
@@ -925,57 +918,6 @@ async function supaAddMessage(ticketId, auteur, nom, texte) {
     statut: auteur==="admin" ? "En cours" : "Nouveau",
     updated_at: new Date().toISOString()
   }).eq("id", ticketId);
-}
-
-// ─── C1 : ABONNEMENTS ────────────────────────────────────────────────────────
-async function supaDemanderAbonnement(userId, userNom, userEmail, preuve, telephone, montant, methode) {
-  // Insérer dans paiements
-  var { data: paiement } = await supa.from("paiements").insert({
-    user_id: userId, montant, methode,
-    reference_transaction: preuve,
-    nom_payeur: userNom, telephone,
-    statut: "en_attente",
-    created_at: new Date().toISOString(),
-  }).select().single();
-  // Insérer dans abonnements avec statut en_attente
-  await supa.from("abonnements").insert({
-    user_id: userId, type: "annuel", prix: montant,
-    statut: "en_attente", created_at: new Date().toISOString(),
-  });
-  // Log système
-  console.log("[FichesPro] Demande abonnement soumise:", userId, montant, methode);
-  return paiement;
-}
-
-async function supaGetAbonnements() {
-  var { data } = await supa.from("abonnements")
-    .select("*, users(nom, email)")
-    .order("created_at", { ascending:false });
-  return data || [];
-}
-
-async function supaValiderAbonnement(paiementId, userId) {
-  var dateFin = new Date();
-  dateFin.setFullYear(dateFin.getFullYear() + 1);
-  // Activer dans users
-  await supa.from("users").update({
-    abonnement_actif: true,
-    abonnement_expire: dateFin.toISOString(),
-  }).eq("id", userId);
-  // Confirmer paiement
-  if (paiementId) await supa.from("paiements").update({ statut: "confirme" }).eq("id", paiementId);
-  // Activer abonnement
-  await supa.from("abonnements").update({ statut: "actif", date_debut: new Date().toISOString(), date_fin: dateFin.toISOString() }).eq("user_id", userId).eq("statut", "en_attente");
-  console.log("[FichesPro] Abonnement validé pour userId:", userId);
-}
-
-// C4 : Vérifier abonnement actif côté Supabase
-async function supaVerifierAbonnement(userId) {
-  if (!userId) return false;
-  var { data } = await supa.from("users").select("abonnement_actif, abonnement_expire").eq("id", userId).single();
-  if (!data || !data.abonnement_actif) return false;
-  if (data.abonnement_expire && new Date(data.abonnement_expire) < new Date()) return false;
-  return true;
 }
 
 // ─── C3 : COMMANDES IMPRIMÉES ─────────────────────────────────────────────────
