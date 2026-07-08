@@ -1539,15 +1539,42 @@ function UserApp({ user, onLogout, appCfg, setUser }) {
 
   var badgesDebloques = verifierBadges(historique.length, abonne, Object.keys(notesUtilisateur).length);
 
-  // C4: Vérifier abonnement au chargement depuis Supabase
+  // C4: Vérifier abonnement au chargement + écoute Realtime
   useEffect(function() {
     if (!user.id) return;
+
+    // Vérification initiale au chargement
     supaVerifierAbonnement(user.id).then(function(actif) {
       if (actif && !abonne) {
         setAbonne(true);
-        console.log("[FichesPro] Abonnement actif détecté depuis Supabase");
+        console.log("[FichesPro] Abonnement actif détecté au chargement");
       }
     }).catch(function() {});
+
+    // Supabase Realtime — écoute les changements de la table users
+    var channel = supa.channel("abonnement-user-" + user.id)
+      .on("postgres_changes", {
+        event: "UPDATE",
+        schema: "public",
+        table: "users",
+        filter: "id=eq." + user.id,
+      }, function(payload) {
+        var newData = payload.new;
+        if (newData && newData.abonnement_actif === true) {
+          setAbonne(true);
+          showT("🎉 Votre abonnement Premium est maintenant actif !", "success");
+          console.log("[FichesPro] Abonnement activé via Realtime");
+        } else if (newData && newData.abonnement_actif === false) {
+          setAbonne(false);
+          console.log("[FichesPro] Abonnement désactivé via Realtime");
+        }
+      })
+      .subscribe();
+
+    // Nettoyage à la déconnexion
+    return function() {
+      supa.removeChannel(channel);
+    };
   }, [user.id]);
 
   async function telecharger(f) {
