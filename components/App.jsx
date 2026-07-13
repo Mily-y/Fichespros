@@ -1539,43 +1539,71 @@ function UserApp({ user, onLogout, appCfg, setUser }) {
 
   var badgesDebloques = verifierBadges(historique.length, abonne, Object.keys(notesUtilisateur).length);
 
-  // C4: Vérifier abonnement au chargement + écoute Realtime
+  // C4: Vérifier abonnement au chargement + écoute Realtime + polling
   useEffect(function() {
-    if (!user.id) return;
 
-    // Vérification initiale au chargement
-    supaVerifierAbonnement(user.id).then(function(actif) {
-      if (actif && !abonne) {
-        setAbonne(true);
-        console.log("[FichesPro] Abonnement actif détecté au chargement");
+    // Vérification initiale au chargement (avec ou sans user.id)
+    function verifierAbo() {
+      if (user.id) {
+        supaVerifierAbonnement(user.id).then(function(actif) {
+          if (actif && !abonne) {
+            setAbonne(true);
+            showT("🎉 Votre abonnement Premium est actif !", "success");
+          } else if (!actif && abonne) {
+            setAbonne(false);
+          }
+        }).catch(function() {});
+      } else if (user.email) {
+        // Fallback par email si pas de UUID Supabase
+        supa.from("users").select("abonnement_actif, abonnement_expire")
+          .eq("email", user.email).single()
+          .then(function(res) {
+            if (res.data && res.data.abonnement_actif) {
+              var expire = res.data.abonnement_expire;
+              if (!expire || new Date(expire) > new Date()) {
+                if (!abonne) {
+                  setAbonne(true);
+                  showT("🎉 Votre abonnement Premium est actif !", "success");
+                }
+              }
+            }
+          }).catch(function() {});
       }
-    }).catch(function() {});
+    }
+
+    // Vérification immédiate
+    verifierAbo();
+
+    // Polling toutes les 30 secondes (fallback si Realtime ne fonctionne pas)
+    var interval = setInterval(verifierAbo, 30000);
 
     // Supabase Realtime — écoute les changements de la table users
-    var channel = supa.channel("abonnement-user-" + user.id)
-      .on("postgres_changes", {
-        event: "UPDATE",
-        schema: "public",
-        table: "users",
-        filter: "id=eq." + user.id,
-      }, function(payload) {
-        var newData = payload.new;
-        if (newData && newData.abonnement_actif === true) {
-          setAbonne(true);
-          showT("🎉 Votre abonnement Premium est maintenant actif !", "success");
-          console.log("[FichesPro] Abonnement activé via Realtime");
-        } else if (newData && newData.abonnement_actif === false) {
-          setAbonne(false);
-          console.log("[FichesPro] Abonnement désactivé via Realtime");
-        }
-      })
-      .subscribe();
+    var channel = null;
+    if (user.id) {
+      channel = supa.channel("abonnement-user-" + user.id)
+        .on("postgres_changes", {
+          event: "UPDATE",
+          schema: "public",
+          table: "users",
+          filter: "id=eq." + user.id,
+        }, function(payload) {
+          var newData = payload.new;
+          if (newData && newData.abonnement_actif === true) {
+            setAbonne(true);
+            showT("🎉 Votre abonnement Premium est maintenant actif !", "success");
+          } else if (newData && newData.abonnement_actif === false) {
+            setAbonne(false);
+          }
+        })
+        .subscribe();
+    }
 
-    // Nettoyage à la déconnexion
+    // Nettoyage
     return function() {
-      supa.removeChannel(channel);
+      clearInterval(interval);
+      if (channel) supa.removeChannel(channel);
     };
-  }, [user.id]);
+  }, [user.id, user.email]);
 
   async function telecharger(f) {
     // C4: Vérifier abonnement côté Supabase pour les fiches premium
@@ -2599,6 +2627,7 @@ function AdminApp({ user, onLogout, appCfg, setAppCfg }) {
   const [ticketOuvert, setTicketOuvert] = useState(null);
   const [reponseAdmin, setReponseAdmin] = useState("");
   const [paiementsEnAttente, setPaiementsEnAttente] = useState([]);
+  const [historiquePaiements, setHistoriquePaiements] = useState([]);
   const [usersSupabase, setUsersSupabase] = useState([]);
   const [usersLoading, setUsersLoading] = useState(true);
   const [searchUser, setSearchUser] = useState("");
@@ -2637,12 +2666,58 @@ function AdminApp({ user, onLogout, appCfg, setAppCfg }) {
 
   // Charger commandes, demandes et abonnements depuis Supabase
   useEffect(function() {
+    // Chargement initial
     supaGetCommandesImprimees().then(setCommandesImprimees).catch(function() {});
     supaGetDemandesFiches().then(setDemandesFiches).catch(function() {});
     supaGetAbonnements().then(setAbonnementsSupabase).catch(function() {});
     supaGetPaiementsEnAttente().then(function(data) {
-      if (data && data.length > 0) setPaiementsEnAttente(data);
+      if (data) setPaiementsEnAttente(data);
     }).catch(function() {});
+
+    // Charger historique paiements au démarrage
+    supa.from("paiements").select("*, users(nom,email)").order("created_at",{ascending:false}).limit(50)
+      .then(function(res){ if(res.data) setHistoriquePaiements(res.data); })
+      .catch(function() {});
+
+    // Realtime — écouter les nouveaux paiements en attente
+    var channelPaie = supa.channel("admin-paiements")
+      .on("postgres_changes", {
+        event: "INSERT",
+        schema: "public",
+        table: "paiements",
+      }, function() {
+        // Rafraîchir la liste des paiements en attente
+        supaGetPaiementsEnAttente().then(function(data) {
+          if (data) setPaiementsEnAttente(data);
+        }).catch(function() {});
+        showT("💰 Nouveau paiement reçu !", "info");
+      })
+      .subscribe();
+
+    // Realtime — écouter les nouveaux abonnements
+    var channelAbo = supa.channel("admin-abonnements")
+      .on("postgres_changes", {
+        event: "*",
+        schema: "public",
+        table: "abonnements",
+      }, function() {
+        supaGetAbonnements().then(setAbonnementsSupabase).catch(function() {});
+      })
+      .on("postgres_changes", {
+        event: "UPDATE",
+        schema: "public",
+        table: "users",
+        filter: "abonnement_actif=eq.true",
+      }, function() {
+        supaGetAbonnements().then(setAbonnementsSupabase).catch(function() {});
+        showT("⭐ Un abonnement vient d'être activé !", "success");
+      })
+      .subscribe();
+
+    return function() {
+      supa.removeChannel(channelPaie);
+      supa.removeChannel(channelAbo);
+    };
   }, []);
   const [paieEdit, setPaieEdit] = useState({
     mtn:     { numero: appCfg.paiement.mtn.numero,     nom: appCfg.paiement.mtn.nom     },
@@ -3440,25 +3515,37 @@ function AdminApp({ user, onLogout, appCfg, setAppCfg }) {
             )}
 
             {/* Historique paiements */}
-            <h2 className="fd" style={{ fontSize:15, fontWeight:700, marginBottom:12 }}>📋 Historique des paiements</h2>
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
+              <h2 className="fd" style={{ fontSize:15, fontWeight:700 }}>📋 Historique des paiements</h2>
+              <button className="btn btn-s btn-sm" onClick={function(){
+                supa.from("paiements").select("*, users(nom,email)").order("created_at",{ascending:false}).limit(50)
+                  .then(function(res){
+                    if(res.data) setHistoriquePaiements(res.data);
+                    showT("Historique actualisé","success");
+                  }).catch(function(){});
+              }}>🔄 Actualiser</button>
+            </div>
             <div className="card" style={{ overflowX:"auto" }}>
               <table>
-                <thead><tr><th>ID</th><th>Utilisateur</th><th>Montant</th><th>Méthode</th><th>Date</th><th>Statut</th></tr></thead>
+                <thead><tr><th>ID</th><th>Utilisateur</th><th>Montant</th><th>Méthode</th><th>Référence</th><th>Date</th><th>Statut</th></tr></thead>
                 <tbody>
-                  {[
-                    { id:"#4821", u:"Kouassi Amara",     m:"MTN MoMo",   d:"2024-02-14", ok:true  },
-                    { id:"#4820", u:"Koffi Jean-Pierre", m:"Moov Money", d:"2024-02-13", ok:true  },
-                    { id:"#4819", u:"Sossou Marie",      m:"Celtiis",    d:"2024-02-12", ok:false },
-                    { id:"#4818", u:"Bello Fatima",      m:"MTN MoMo",   d:"2024-02-11", ok:true  },
-                  ].map(function(p) {
+                  {historiquePaiements.length === 0 ? (
+                    <tr><td colSpan={7} style={{ textAlign:"center", padding:"24px", color:G.textMuted }}>
+                      Aucun paiement — cliquez 🔄 Actualiser
+                    </td></tr>
+                  ) : historiquePaiements.map(function(p) {
+                    var nomUser = (p.users && p.users.nom) ? p.users.nom : (p.nom_payeur || "—");
+                    var statut = p.statut === "confirme" ? "Validé" : p.statut === "echec" ? "Rejeté" : "En attente";
+                    var statutCls = p.statut === "confirme" ? "b-ok" : p.statut === "echec" ? "b-err" : "b-warn";
                     return (
                       <tr key={p.id}>
-                        <td style={{ fontFamily:"monospace", color:G.accent, fontWeight:700 }}>{p.id}</td>
-                        <td style={{ fontWeight:600 }}>{p.u}</td>
-                        <td style={{ fontWeight:700 }}>3 000 FCFA</td>
-                        <td style={{ color:G.textMuted }}>{p.m}</td>
-                        <td style={{ color:G.textMuted }}>{new Date(p.d).toLocaleDateString("fr-FR")}</td>
-                        <td><span className={"badge "+(p.ok?"b-ok":"b-err")}>{p.ok?"Validé":"Rejeté"}</span></td>
+                        <td style={{ fontFamily:"monospace", color:G.accent, fontWeight:700, fontSize:11 }}>#{p.id}</td>
+                        <td style={{ fontWeight:600 }}>{nomUser}</td>
+                        <td style={{ fontWeight:700 }}>{p.montant ? p.montant.toLocaleString("fr-FR")+" FCFA" : "—"}</td>
+                        <td style={{ color:G.textMuted }}>{p.methode ? p.methode.toUpperCase() : "—"}</td>
+                        <td style={{ fontFamily:"monospace", fontSize:11, color:G.accentLight }}>{p.reference_transaction || "—"}</td>
+                        <td style={{ color:G.textMuted, fontSize:12 }}>{p.created_at ? new Date(p.created_at).toLocaleDateString("fr-FR") : "—"}</td>
+                        <td><span className={"badge "+statutCls}>{statut}</span></td>
                       </tr>
                     );
                   })}
