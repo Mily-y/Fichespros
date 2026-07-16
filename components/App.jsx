@@ -114,6 +114,7 @@ const NAV_USER = [
   { id:"abonnement", icon:"⭐", label:"Abonnement" },
   { id:"profil",     icon:"👤", label:"Profil"     },
   { id:"support",    icon:"💬", label:"Support"    },
+  { id:"apropos",    icon:"ℹ️", label:"À propos"   },
 ];
 
 // ─── ABONNEMENTS ÉCOLE ET FAMILLE ────────────────────────────────────────────
@@ -2586,12 +2587,154 @@ function UserApp({ user, onLogout, appCfg, setUser }) {
             </div>
           </div>
         )}
+        {page==="apropos" && (
+          <div style={{ maxWidth:640 }}>
+            {/* LOGO PROFESSIONNEL */}
+            <div style={{ textAlign:"center", marginBottom:28 }}>
+              <div style={{ width:80, height:80, borderRadius:22, background:"linear-gradient(135deg,#4f7dff,#7c3aed)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:40, margin:"0 auto 12px" }}>📚</div>
+              <h1 className="fd" style={{ fontSize:24, fontWeight:800, marginBottom:4 }}>FichesPro</h1>
+              <p style={{ color:G.textSecondary, fontSize:13 }}>La plateforme des fiches pédagogiques au Bénin</p>
+              <div style={{ display:"flex", justifyContent:"center", gap:8, marginTop:10, flexWrap:"wrap" }}>
+                <span className="badge b-ok">v1.0</span>
+                <span className="badge b-free">🇧🇯 Bénin</span>
+                <span className="badge b-gold">⭐ Certifié</span>
+              </div>
+            </div>
+
+            {/* À PROPOS */}
+            <div className="card" style={{ marginBottom:14 }}>
+              <h2 className="fd" style={{ fontSize:16, fontWeight:800, marginBottom:12 }}>📖 À propos de FichesPro</h2>
+              <p style={{ fontSize:13, color:G.textSecondary, lineHeight:1.8, marginBottom:10 }}>
+                <b style={{ color:G.textPrimary }}>FichesPro</b> est la première plateforme numérique de fiches pédagogiques dédiée aux enseignants et apprenants du Bénin. Notre mission est de rendre l'enseignement de qualité accessible à tous, partout au Bénin.
+              </p>
+              <p style={{ fontSize:13, color:G.textSecondary, lineHeight:1.8, marginBottom:10 }}>
+                Nous proposons des fiches pédagogiques couvrant toutes les matières du primaire — du CI au CM2 — conformes aux programmes officiels béninois.
+              </p>
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginTop:14 }}>
+                {[
+                  { icon:"📚", label:"156+ fiches", desc:"Toutes matières" },
+                  { icon:"🎓", label:"CI au CM2", desc:"Tous niveaux" },
+                  { icon:"🇧🇯", label:"Bénin", desc:"Programme officiel" },
+                  { icon:"📱", label:"Mobile first", desc:"Disponible partout" },
+                ].map(function(s) {
+                  return (
+                    <div key={s.label} style={{ padding:"12px 14px", background:"rgba(79,125,255,.07)", borderRadius:12, border:"1px solid rgba(79,125,255,.15)" }}>
+                      <div style={{ fontSize:22, marginBottom:4 }}>{s.icon}</div>
+                      <div style={{ fontWeight:800, fontSize:14 }}>{s.label}</div>
+                      <div style={{ fontSize:11, color:G.textMuted }}>{s.desc}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* MOYENS DE PAIEMENT */}
+            <div className="card" style={{ marginBottom:14 }}>
+              <h2 className="fd" style={{ fontSize:16, fontWeight:800, marginBottom:14 }}>💳 Moyens de paiement acceptés</h2>
+              <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+                {[
+                  { icon:"📱", label:"MTN Mobile Money", color:"#fbbf24", desc:"Paiement rapide via *880#", numero:paieCfg.mtn.numero },
+                  { icon:"📲", label:"Moov Money",       color:"#0099ff", desc:"Paiement rapide via *555#", numero:paieCfg.moov.numero },
+                  { icon:"📶", label:"Celtiis",          color:"#e63946", desc:"Paiement rapide via *144#", numero:paieCfg.celtiis.numero },
+                ].map(function(p) {
+                  return (
+                    <div key={p.label} style={{ display:"flex", alignItems:"center", gap:14, padding:"12px 14px", background:"rgba(255,255,255,.04)", borderRadius:12, border:"1px solid "+G.border }}>
+                      <div style={{ width:44, height:44, borderRadius:12, background:p.color+"22", display:"flex", alignItems:"center", justifyContent:"center", fontSize:22, flexShrink:0 }}>{p.icon}</div>
+                      <div style={{ flex:1 }}>
+                        <div style={{ fontWeight:700, fontSize:14, color:p.color }}>{p.label}</div>
+                        <div style={{ fontSize:12, color:G.textMuted }}>{p.desc}</div>
+                      </div>
+                      <div style={{ fontSize:12, fontFamily:"monospace", color:G.textSecondary, fontWeight:700 }}>{p.numero}</div>
+                    </div>
+                  );
+                })}
+              </div>
+              <div style={{ marginTop:12, padding:"10px 14px", background:"rgba(16,185,129,.08)", borderRadius:10, fontSize:12, color:G.success }}>
+                ✅ Paiements sécurisés — Activation sous 15-30 minutes après confirmation
+              </div>
+            </div>
+
+            {/* SUPPORT */}
+            <div className="card" style={{ marginBottom:14 }}>
+              <h2 className="fd" style={{ fontSize:16, fontWeight:800, marginBottom:14 }}>📞 Nous contacter</h2>
+              <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+                <a href={"https://wa.me/"+supportCfg.whatsapp} target="_blank" rel="noreferrer"
+                  style={{ display:"flex", alignItems:"center", gap:14, padding:"14px", background:"rgba(37,211,102,.08)", border:"1px solid rgba(37,211,102,.25)", borderRadius:14, textDecoration:"none" }}>
+                  <div style={{ width:44, height:44, borderRadius:12, background:"rgba(37,211,102,.15)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:24, flexShrink:0 }}>💬</div>
+                  <div style={{ flex:1 }}>
+                    <div style={{ fontWeight:700, fontSize:14, color:"#25d366" }}>WhatsApp</div>
+                    <div style={{ fontSize:12, color:G.textMuted }}>+{supportCfg.whatsapp} · Réponse rapide</div>
+                  </div>
+                  <span style={{ fontSize:18, color:"#25d366" }}>→</span>
+                </a>
+                <a href={"https://t.me/"+supportCfg.telegram} target="_blank" rel="noreferrer"
+                  style={{ display:"flex", alignItems:"center", gap:14, padding:"14px", background:"rgba(42,171,238,.08)", border:"1px solid rgba(42,171,238,.25)", borderRadius:14, textDecoration:"none" }}>
+                  <div style={{ width:44, height:44, borderRadius:12, background:"rgba(42,171,238,.15)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:24, flexShrink:0 }}>✈️</div>
+                  <div style={{ flex:1 }}>
+                    <div style={{ fontWeight:700, fontSize:14, color:"#2aabee" }}>Telegram</div>
+                    <div style={{ fontSize:12, color:G.textMuted }}>@{supportCfg.telegram} · Annonces & aide</div>
+                  </div>
+                  <span style={{ fontSize:18, color:"#2aabee" }}>→</span>
+                </a>
+                <div style={{ display:"flex", alignItems:"center", gap:14, padding:"14px", background:"rgba(79,125,255,.07)", border:"1px solid rgba(79,125,255,.18)", borderRadius:14 }}>
+                  <div style={{ width:44, height:44, borderRadius:12, background:"rgba(79,125,255,.15)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:24, flexShrink:0 }}>🕐</div>
+                  <div>
+                    <div style={{ fontWeight:700, fontSize:14, color:G.accentLight }}>Horaires du support</div>
+                    <div style={{ fontSize:12, color:G.textMuted }}>Lun–Ven : 8h–18h · Sam : 9h–14h</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* POLITIQUE DE CONFIDENTIALITE */}
+            <div className="card" style={{ marginBottom:14 }}>
+              <h2 className="fd" style={{ fontSize:16, fontWeight:800, marginBottom:14 }}>🔒 Politique de confidentialité</h2>
+              {[
+                { t:"Données collectées", c:"Nous collectons votre nom, email et historique de téléchargements uniquement pour fournir nos services. Aucune donnée n'est vendue à des tiers." },
+                { t:"Utilisation des données", c:"Vos données sont utilisées exclusivement pour gérer votre compte, traiter vos abonnements et améliorer nos services." },
+                { t:"Sécurité", c:"Toutes les données sont stockées de manière sécurisée via Supabase avec chiffrement SSL. Vos mots de passe sont hashés et jamais accessibles en clair." },
+                { t:"Vos droits", c:"Vous pouvez demander la suppression de votre compte et de toutes vos données à tout moment en nous contactant sur WhatsApp." },
+                { t:"Cookies", c:"Notre application n'utilise pas de cookies publicitaires. Seules des données de session sont conservées pour maintenir votre connexion." },
+              ].map(function(item) {
+                return (
+                  <details key={item.t} style={{ marginBottom:8, background:"rgba(255,255,255,.03)", borderRadius:10, padding:"10px 14px", border:"1px solid "+G.border }}>
+                    <summary style={{ fontWeight:700, cursor:"pointer", fontSize:13 }}>🔹 {item.t}</summary>
+                    <p style={{ marginTop:8, color:G.textSecondary, fontSize:12, lineHeight:1.7 }}>{item.c}</p>
+                  </details>
+                );
+              })}
+            </div>
+
+            {/* CONDITIONS D'UTILISATION */}
+            <div className="card" style={{ marginBottom:20 }}>
+              <h2 className="fd" style={{ fontSize:16, fontWeight:800, marginBottom:14 }}>📜 Conditions d'utilisation</h2>
+              {[
+                { t:"Accès au service", c:"FichesPro est accessible à toute personne disposant d'un appareil connecté à internet. Un compte est requis pour télécharger des fiches." },
+                { t:"Abonnement et paiements", c:"L'abonnement annuel est de 3 000 FCFA. Le paiement s'effectue via Mobile Money (MTN, Moov, Celtiis). L'activation intervient sous 15-30 minutes après validation." },
+                { t:"Utilisation des fiches", c:"Les fiches téléchargées sont destinées à un usage personnel ou pédagogique uniquement. Toute reproduction commerciale ou redistribution est interdite." },
+                { t:"Propriété intellectuelle", c:"Toutes les fiches sont la propriété exclusive de FichesPro. Les contenus sont protégés par le droit d'auteur béninois et international." },
+                { t:"Résiliation", c:"Vous pouvez supprimer votre compte à tout moment. Les abonnements ne sont pas remboursables sauf en cas de dysfonctionnement majeur de notre part." },
+                { t:"Responsabilité", c:"FichesPro met tout en œuvre pour garantir la qualité des fiches mais ne peut être tenu responsable d'erreurs pédagogiques éventuelles." },
+              ].map(function(item) {
+                return (
+                  <details key={item.t} style={{ marginBottom:8, background:"rgba(255,255,255,.03)", borderRadius:10, padding:"10px 14px", border:"1px solid "+G.border }}>
+                    <summary style={{ fontWeight:700, cursor:"pointer", fontSize:13 }}>📌 {item.t}</summary>
+                    <p style={{ marginTop:8, color:G.textSecondary, fontSize:12, lineHeight:1.7 }}>{item.c}</p>
+                  </details>
+                );
+              })}
+              <div style={{ marginTop:14, fontSize:11, color:G.textMuted, textAlign:"center", lineHeight:1.6 }}>
+                Dernière mise à jour : Juillet 2026 · En utilisant FichesPro, vous acceptez ces conditions.
+              </div>
+            </div>
+
+          </div>
+        )}
+
       </main>
     </>
   );
 }
-
-// ─── APP ADMIN ────────────────────────────────────────────────────────────────
 function AdminApp({ user, onLogout, appCfg, setAppCfg }) {
   const [tab, setTab] = useState("stats");
   const [drawerOpen, setDrawerOpen] = useState(false);
