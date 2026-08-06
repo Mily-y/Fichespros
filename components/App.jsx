@@ -827,8 +827,27 @@ async function supaRegister(nom, email, pwd) {
 }
 
 async function supaLogin(email, pwd) {
-  if (email === "admin@fichespro.com" && pwd === "admin123") {
-    return { role:"admin", nom:"Administrateur", email };
+  // CORRECTION C7 : l'admin doit obtenir une vraie session Supabase Auth pour
+  // que les policies RLS (auth.jwt()->>'email') le laissent voir tous les
+  // utilisateurs / gérer les codes promo, et pour que le changement de mot de
+  // passe persiste réellement. On tente donc toujours la vraie connexion
+  // Supabase en premier, même pour l'email admin.
+  if (email === "admin@fichespro.com") {
+    var { data: adminData, error: adminError } = await supa.auth.signInWithPassword({ email, password: pwd });
+    if (!adminError && adminData && adminData.user) {
+      // Vrai compte Supabase admin — session réelle établie
+      var { data: adminProfil } = await supa.from("users").select("*").eq("id", adminData.user.id).single();
+      saveCompteLocal({ nom:"Administrateur", email, pwd, role:"admin" });
+      return { role:"admin", nom: adminProfil?.nom || "Administrateur", email, id: adminData.user.id };
+    }
+    // Repli historique : mot de passe par défaut tant que le compte Supabase
+    // admin n'a pas encore été créé (voir corrections_admin_v2.sql). Dans ce
+    // mode dégradé, aucune session Supabase n'existe donc la liste des
+    // utilisateurs et le changement de mot de passe resteront limités.
+    if (pwd === "admin123") {
+      return { role:"admin", nom:"Administrateur", email };
+    }
+    throw new Error("Email ou mot de passe incorrect.");
   }
   var { data, error } = await supa.auth.signInWithPassword({ email, password: pwd });
   if (error) throw new Error("Email ou mot de passe incorrect.");
@@ -933,6 +952,49 @@ async function supaGetAbonnements() {
   return data || [];
 }
 
+// ─── CODES PROMO (Supabase) ──────────────────────────────────────────────────
+// Convertit une ligne Supabase (colonnes DB) vers le format utilisé dans l'UI
+function mapCodePromoDb(row) {
+  return {
+    id: row.id, code: row.code, reduction: row.reduction, type: row.type,
+    actif: row.actif, utilises: row.utilises || 0,
+    max: row.max_utilisations, expire: row.date_expiration,
+  };
+}
+
+async function supaGetCodesPromo() {
+  var { data, error } = await supa.from("codes_promo").select("*").order("created_at", { ascending:false });
+  if (error || !data) return null;
+  return data.map(mapCodePromoDb);
+}
+
+async function supaCreateCodePromo(code, reduction, type, max, expire) {
+  var { data, error } = await supa.from("codes_promo").insert({
+    code: code.toUpperCase(), reduction: reduction, type: type,
+    actif: true, utilises: 0, max_utilisations: max, date_expiration: expire,
+  }).select().single();
+  if (error) throw new Error(error.message);
+  return mapCodePromoDb(data);
+}
+
+async function supaToggleCodePromo(id, actif) {
+  var { error } = await supa.from("codes_promo").update({ actif: actif }).eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+async function supaDeleteCodePromo(id) {
+  var { error } = await supa.from("codes_promo").delete().eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+// Vérifie un code promo saisi par un utilisateur (lecture publique en base)
+async function supaValiderCodePromo(code) {
+  var { data, error } = await supa.from("codes_promo")
+    .select("*").eq("code", code.toUpperCase()).eq("actif", true).maybeSingle();
+  if (error || !data) return null;
+  return mapCodePromoDb(data);
+}
+
 // C4 : Vérifier abonnement actif côté Supabase
 async function supaVerifierAbonnement(userId) {
   if (!userId) return false;
@@ -997,47 +1059,39 @@ async function supaResetPassword(email) {
 }
 
 // ─── C7 : CHANGEMENT MOT DE PASSE ADMIN ──────────────────────────────────────
+// CORRECTION : le changement de mot de passe ne peut être réel que si
+// l'admin possède un vrai compte Supabase Auth (voir corrections_admin_v2.sql
+// + supaLogin ci-dessus). On vérifie d'abord l'ancien mot de passe via une
+// vraie tentative de connexion Supabase, puis on met à jour via
+// supa.auth.updateUser, qui persiste réellement (contrairement à l'ancienne
+// version qui écrivait dans le localStorage sans que cela ait le moindre
+// effet sur la connexion suivante).
 async function supaChangerMotDePasse(ancienPwd, nouveauPwd) {
-  // L'admin fictif (admin@fichespro.com) ne peut pas utiliser Supabase Auth
-  // On vérifie localement l'ancien mot de passe
-  if (ancienPwd !== "admin123") {
-    // Essayer aussi via Supabase si l'admin a un vrai compte
-    try {
-      var { error: loginErr } = await supa.auth.signInWithPassword({
-        email: "admin@fichespro.com",
-        password: ancienPwd
-      });
-      if (loginErr) throw new Error("Mot de passe actuel incorrect.");
-    } catch(e) {
-      if (ancienPwd !== "admin123") {
-        throw new Error("Mot de passe actuel incorrect.");
+  var { data: sessionData } = await supa.auth.getSession();
+
+  if (!sessionData || !sessionData.session) {
+    // Pas de session Supabase active : on tente de se connecter avec
+    // l'ancien mot de passe pour vérifier qu'il est correct et ouvrir une
+    // vraie session avant de pouvoir changer le mot de passe.
+    var { error: loginErr } = await supa.auth.signInWithPassword({
+      email: "admin@fichespro.com",
+      password: ancienPwd
+    });
+    if (loginErr) {
+      if (ancienPwd === "admin123") {
+        throw new Error(
+          "Aucun compte administrateur Supabase n'existe encore. " +
+          "Créez-le une première fois dans Supabase (Authentication → Add user) " +
+          "avec l'email admin@fichespro.com, puis reconnectez-vous avant de changer le mot de passe."
+        );
       }
+      throw new Error("Mot de passe actuel incorrect.");
     }
   }
-  // Mettre à jour via Supabase Auth
-  try {
-    var { error } = await supa.auth.updateUser({ password: nouveauPwd });
-    if (error) {
-      // Si l'admin n'a pas de session Supabase, sauvegarder le nouveau mdp localement
-      var comptes = JSON.parse(localStorage.getItem("fichespro_comptes") || "[]");
-      var idx = comptes.findIndex(function(c) { return c.email === "admin@fichespro.com"; });
-      if (idx >= 0) {
-        comptes[idx].pwd = nouveauPwd;
-        localStorage.setItem("fichespro_comptes", JSON.stringify(comptes));
-      } else {
-        comptes.push({ email:"admin@fichespro.com", pwd:nouveauPwd, role:"admin", nom:"Administrateur" });
-        localStorage.setItem("fichespro_comptes", JSON.stringify(comptes));
-      }
-      console.log("[FichesPro] Mot de passe admin mis à jour localement");
-      return;
-    }
-  } catch(e) {
-    // Fallback local
-    var comptes2 = JSON.parse(localStorage.getItem("fichespro_comptes") || "[]");
-    var idx2 = comptes2.findIndex(function(c) { return c.email === "admin@fichespro.com"; });
-    if (idx2 >= 0) { comptes2[idx2].pwd = nouveauPwd; }
-    else { comptes2.push({ email:"admin@fichespro.com", pwd:nouveauPwd, role:"admin", nom:"Administrateur" }); }
-    localStorage.setItem("fichespro_comptes", JSON.stringify(comptes2));
+
+  var { error } = await supa.auth.updateUser({ password: nouveauPwd });
+  if (error) {
+    throw new Error("Impossible de modifier le mot de passe : " + error.message);
   }
   console.log("[FichesPro] Mot de passe admin modifié avec succès");
 }
@@ -1668,10 +1722,21 @@ function UserApp({ user, onLogout, appCfg, setUser }) {
     if (Object.keys(notesUtilisateur).length === 0) showT("✍️ Badge débloqué : Critique !", "info");
   }
 
-  function appliquerCodePromo(code) {
-    var promo = CODES_PROMO_DEFAUT.find(function(p) { return p.code === code.toUpperCase() && p.actif; });
+  async function appliquerCodePromo(code) {
+    if (!code) { setCodePromoErr("Veuillez saisir un code"); return; }
+    var promo = null;
+    try {
+      promo = await supaValiderCodePromo(code);
+    } catch(e) {
+      promo = null;
+    }
+    // Repli sur la liste locale si Supabase est injoignable (mode dégradé)
+    if (!promo) {
+      promo = CODES_PROMO_DEFAUT.find(function(p) { return p.code === code.toUpperCase() && p.actif; }) || null;
+    }
     if (!promo) { setCodePromoErr("Code invalide ou expiré"); return; }
     if (new Date(promo.expire) < new Date()) { setCodePromoErr("Ce code a expiré"); return; }
+    if (promo.max && promo.utilises >= promo.max) { setCodePromoErr("Ce code a atteint sa limite d'utilisation"); return; }
     setCodePromoApplique(promo);
     setCodePromoErr("");
     var reduction = promo.type === "pourcentage"
@@ -2769,6 +2834,7 @@ function AdminApp({ user, onLogout, appCfg, setAppCfg }) {
   const [uploadingMat, setUploadingMat] = useState(null);
   const [userDetail, setUserDetail] = useState(null);
   const [codesPromo, setCodesPromo] = useState(CODES_PROMO_DEFAUT);
+  const [codesPromoLoading, setCodesPromoLoading] = useState(true);
   const [livraisons, setLivraisons] = useState(LIVRAISONS_DEMO);
   const [tickets, setTickets] = useState(TICKETS_DEMO);
   const [ticketOuvert, setTicketOuvert] = useState(null);
@@ -2809,6 +2875,21 @@ function AdminApp({ user, onLogout, appCfg, setAppCfg }) {
       setUsersLoading(false);
     }
     chargerUsers();
+  }, []);
+
+  // Charger les codes promo depuis Supabase (source de vérité — corrige la
+  // réapparition des codes supprimés et la disparition des codes créés)
+  useEffect(function() {
+    async function chargerCodesPromo() {
+      setCodesPromoLoading(true);
+      try {
+        var data = await supaGetCodesPromo();
+        if (data) setCodesPromo(data);
+        // si data est null (erreur/table vide), on garde CODES_PROMO_DEFAUT en repli
+      } catch(e) {}
+      setCodesPromoLoading(false);
+    }
+    chargerCodesPromo();
   }, []);
 
   // Charger commandes, demandes et abonnements depuis Supabase
@@ -3909,7 +3990,7 @@ function AdminApp({ user, onLogout, appCfg, setAppCfg }) {
           <div>
             <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:20 }}>
               <h1 className="fd" style={{ fontSize:20, fontWeight:800 }}>🎟️ Codes Promo</h1>
-              <button className="btn btn-p btn-sm" onClick={function(){
+              <button className="btn btn-p btn-sm" onClick={async function(){
                 var code = prompt("Nouveau code (ex: NOEL2024) :");
                 if(!code) return;
                 var reduction = prompt("Réduction (ex: 25 pour 25% ou 1500 pour 1500 FCFA) :");
@@ -3917,11 +3998,13 @@ function AdminApp({ user, onLogout, appCfg, setAppCfg }) {
                 var type = prompt("Type : pourcentage ou montant ?") || "pourcentage";
                 var max = parseInt(prompt("Nombre max d'utilisations ?") || "100");
                 var expire = prompt("Date expiration (YYYY-MM-DD) :") || "2025-12-31";
-                setCodesPromo(function(prev){ return prev.concat([{
-                  id: Date.now(), code: code.toUpperCase(), reduction: parseFloat(reduction)||0,
-                  type: type, actif: true, utilises: 0, max: max, expire: expire
-                }]); });
-                showT("Code "+code.toUpperCase()+" créé !", "success");
+                try {
+                  var nouveauCode = await supaCreateCodePromo(code, parseFloat(reduction)||0, type, max, expire);
+                  setCodesPromo(function(prev){ return prev.concat([nouveauCode]); });
+                  showT("Code "+code.toUpperCase()+" créé !", "success");
+                } catch(e) {
+                  showT("Erreur : impossible de créer le code (" + (e.message||"vérifiez qu'il n'existe pas déjà") + ")", "error");
+                }
               }}>+ Créer un code</button>
             </div>
             {/* Stats */}
@@ -3953,14 +4036,25 @@ function AdminApp({ user, onLogout, appCfg, setAppCfg }) {
                         </td>
                         <td>
                           <div style={{ display:"flex", gap:5 }}>
-                            <button className="btn btn-s btn-sm" onClick={function(){
-                              setCodesPromo(function(prev){ return prev.map(function(x){ return x.id===c.id?Object.assign({},x,{actif:!x.actif}):x; }); });
-                              showT(c.actif?"Code désactivé":"Code activé", "info");
+                            <button className="btn btn-s btn-sm" onClick={async function(){
+                              var nouvelEtat = !c.actif;
+                              try {
+                                await supaToggleCodePromo(c.id, nouvelEtat);
+                                setCodesPromo(function(prev){ return prev.map(function(x){ return x.id===c.id?Object.assign({},x,{actif:nouvelEtat}):x; }); });
+                                showT(c.actif?"Code désactivé":"Code activé", "info");
+                              } catch(e) {
+                                showT("Erreur lors de la mise à jour du code", "error");
+                              }
                             }}>{c.actif?"⏸️":"▶️"}</button>
-                            <button className="btn btn-d btn-sm" onClick={function(){
+                            <button className="btn btn-d btn-sm" onClick={async function(){
                               if(window.confirm("Supprimer le code "+c.code+" ?")){
-                                setCodesPromo(function(prev){ return prev.filter(function(x){ return x.id!==c.id; }); });
-                                showT("Code supprimé","warning");
+                                try {
+                                  await supaDeleteCodePromo(c.id);
+                                  setCodesPromo(function(prev){ return prev.filter(function(x){ return x.id!==c.id; }); });
+                                  showT("Code supprimé","warning");
+                                } catch(e) {
+                                  showT("Erreur lors de la suppression du code", "error");
+                                }
                               }
                             }}>🗑</button>
                           </div>
