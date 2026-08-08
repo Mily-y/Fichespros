@@ -969,8 +969,10 @@ async function supaGetCodesPromo() {
 }
 
 async function supaCreateCodePromo(code, reduction, type, max, expire) {
+  // Sécurité : la contrainte "codes_promo_type_check" n'accepte que ces 2 valeurs
+  var typeValide = (type === "montant") ? "montant" : "pourcentage";
   var { data, error } = await supa.from("codes_promo").insert({
-    code: code.toUpperCase(), reduction: reduction, type: type,
+    code: code.toUpperCase(), reduction: reduction, type: typeValide,
     actif: true, utilises: 0, max_utilisations: max, date_expiration: expire,
   }).select().single();
   if (error) throw new Error(error.message);
@@ -3995,7 +3997,10 @@ function AdminApp({ user, onLogout, appCfg, setAppCfg }) {
                 if(!code) return;
                 var reduction = prompt("Réduction (ex: 25 pour 25% ou 1500 pour 1500 FCFA) :");
                 if(!reduction) return;
-                var type = prompt("Type : pourcentage ou montant ?") || "pourcentage";
+                // Choix fiable (évite les fautes de frappe qui violaient la contrainte
+                // "codes_promo_type_check", laquelle n'accepte QUE "pourcentage" ou "montant")
+                var estPourcentage = window.confirm("Cliquez sur OK pour un POURCENTAGE (%), ou sur Annuler pour un MONTANT fixe (FCFA).");
+                var type = estPourcentage ? "pourcentage" : "montant";
                 var max = parseInt(prompt("Nombre max d'utilisations ?") || "100");
                 var expire = prompt("Date expiration (YYYY-MM-DD) :") || "2025-12-31";
                 try {
