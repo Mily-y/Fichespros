@@ -1270,9 +1270,22 @@ function AuthScreen({ onLogin }) {
       }
       // Fallback : session localStorage
       var session = getSession();
+      // CORRECTION : ne jamais faire confiance à une session locale "admin"
+      // sans session Supabase réelle derrière — sinon l'admin se retrouve
+      // silencieusement connecté en mode dégradé (sans droits RLS réels) et
+      // toute création/modification (codes promo, etc.) échoue sans qu'il
+      // comprenne pourquoi. On force une reconnexion propre dans ce cas.
+      if (session && session.email === "admin@fichespro.com") {
+        clearSession();
+        return;
+      }
       if (session && session.email) onLogin(session);
     }).catch(function() {
       var session = getSession();
+      if (session && session.email === "admin@fichespro.com") {
+        clearSession();
+        return;
+      }
       if (session && session.email) onLogin(session);
     });
   }, []);
@@ -1295,7 +1308,14 @@ function AuthScreen({ onLogin }) {
       }
     } catch(err) {
       // Fallback localStorage si Supabase hors ligne
-      if (mode === "login") {
+      // CORRECTION : ce mode dégradé ne doit JAMAIS s'appliquer au compte
+      // admin. Sinon, une vraie erreur de connexion Supabase (mauvais mot de
+      // passe, compte non confirmé, etc.) est masquée par une "fausse"
+      // connexion sans session réelle, ce qui bloque ensuite toute action
+      // protégée par RLS (création de codes promo, etc.) sans que l'admin
+      // comprenne pourquoi.
+      var emailNormalise = email.trim().toLowerCase();
+      if (mode === "login" && emailNormalise !== "admin@fichespro.com") {
         var compte = findCompte(email);
         if (compte && compte.pwd === pwd) {
           var u2 = { role: compte.role||"user", nom: compte.nom, email: compte.email };
